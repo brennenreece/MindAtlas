@@ -185,37 +185,33 @@ export class MindAtlasView extends ItemView {
   private keepInPlace() {
     if (!Platform.isMobile) return;
     const vv = window.visualViewport;
-    let baseline = vv?.height ?? window.innerHeight;
+    const el = this.contentEl;
     const editing = () => {
       const a = document.activeElement;
-      return a instanceof HTMLElement && this.contentEl.contains(a) && (a.isContentEditable || a.tagName === "INPUT" || a.tagName === "TEXTAREA");
+      return a instanceof HTMLElement && el.contains(a) && (a.isContentEditable || a.tagName === "INPUT" || a.tagName === "TEXTAREA");
     };
-    const el = this.contentEl;
     const release = () => {
       el.removeClass("is-keyboard");
-      el.style.position = el.style.top = el.style.left = el.style.width = el.style.height = el.style.zIndex = "";
+      el.style.height = "";
     };
-    // While the keyboard is up, iOS pans the visible area instead of resizing the page, which
-    // slides the whole view off screen. Pin the view to exactly the visible area instead.
+    // The iOS keyboard covers the page instead of resizing it. Shrink this view so it ends
+    // where the keyboard begins; everything in it then fits the visible area.
     const sync = () => {
       if (!vv) return;
-      if (!editing()) baseline = Math.max(baseline, vv.height);
-      const keyboard = editing() && (vv.height < baseline - 80 || vv.offsetTop > 0);
-      if (!keyboard) return release();
+      window.scrollTo(0, 0);
+      if (!editing()) return release();
+      el.style.height = "";
+      const r = el.getBoundingClientRect();
+      const covered = r.bottom - (vv.offsetTop + vv.height);
+      if (covered < 40) return release();
       el.addClass("is-keyboard");
-      el.style.position = "fixed";
-      el.style.top = `${vv.offsetTop}px`;
-      el.style.left = `${vv.offsetLeft}px`;
-      el.style.width = `${vv.width}px`;
-      el.style.height = `${vv.height}px`;
-      el.style.zIndex = "50";
+      el.style.height = `${Math.max(120, r.height - covered)}px`;
     };
     vv?.addEventListener("resize", sync);
     vv?.addEventListener("scroll", sync);
     this.registerDomEvent(el, "focusin", () => {
       sync();
-      window.setTimeout(sync, 300);
-      window.setTimeout(sync, 800);
+      for (const ms of [150, 400, 800]) window.setTimeout(sync, ms);
     });
     this.registerDomEvent(el, "focusout", () => window.setTimeout(sync, 100));
     this.register(() => {
