@@ -190,22 +190,24 @@ export class MindAtlasView extends ItemView {
       const a = document.activeElement;
       return a instanceof HTMLElement && el.contains(a) && (a.isContentEditable || a.tagName === "INPUT" || a.tagName === "TEXTAREA");
     };
+    const dbg = el.createDiv("mind-atlas-debug");
     const release = () => {
       el.removeClass("is-keyboard");
       el.style.height = "";
     };
-    // The iOS keyboard covers the page instead of resizing it. Shrink this view so it ends
-    // where the keyboard begins; everything in it then fits the visible area.
+    // The iOS keyboard covers the page instead of resizing it. End this view where the
+    // keyboard begins. The view's top edge doesn't depend on its height, so this can't feed back.
     const sync = () => {
       if (!vv) return;
-      window.scrollTo(0, 0);
-      if (!editing()) return release();
-      el.style.height = "";
       const r = el.getBoundingClientRect();
-      const covered = r.bottom - (vv.offsetTop + vv.height);
-      if (covered < 40) return release();
+      const visibleBottom = vv.offsetTop + vv.height;
+      const kb = editing();
+      dbg.setText(`vv ${Math.round(vv.height)} top ${Math.round(vv.offsetTop)} | win ${window.innerHeight} | view top ${Math.round(r.top)} h ${Math.round(r.height)} | edit ${kb}`);
+      if (!kb) return release();
+      const natural = window.innerHeight - r.top;
+      if (visibleBottom > natural - 40) return release();
       el.addClass("is-keyboard");
-      el.style.height = `${Math.max(120, r.height - covered)}px`;
+      el.style.height = `${Math.max(220, visibleBottom - r.top)}px`;
     };
     vv?.addEventListener("resize", sync);
     vv?.addEventListener("scroll", sync);
@@ -219,7 +221,6 @@ export class MindAtlasView extends ItemView {
       vv?.removeEventListener("scroll", sync);
       release();
     });
-    this.registerDomEvent(document, "scroll", () => window.scrollTo(0, 0), true);
   }
 
   async onOpen() {
