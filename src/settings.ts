@@ -29,6 +29,7 @@ export interface MindAtlasSettings {
   defaultDepth: number;
   // Gap in px between linked nodes.
   spacing: number;
+  hasSeenGuide: boolean;
 }
 
 export const DEFAULT_SETTINGS: MindAtlasSettings = {
@@ -53,6 +54,7 @@ export const DEFAULT_SETTINGS: MindAtlasSettings = {
   editorPosition: "bottom",
   defaultDepth: 3,
   spacing: 50,
+  hasSeenGuide: false,
 };
 
 export function defaultSettings(): MindAtlasSettings {
@@ -98,6 +100,7 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
     maxNodes: num(s.maxNodes, d.maxNodes, 50, 2000),
     defaultDepth: Math.round(num(s.defaultDepth, d.defaultDepth, 1, 6)),
     spacing: num(s.spacing, d.spacing, 10, 200),
+    hasSeenGuide: bool(s.hasSeenGuide, d.hasSeenGuide),
   };
 }
 

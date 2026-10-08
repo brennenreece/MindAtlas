@@ -5,6 +5,14 @@
 .mind-atlas-empty { fill: var(--text-muted); }
 .mind-atlas-toolbar { position: absolute; top: 8px; left: 8px; z-index: 2; display: flex; gap: 6px; align-items: center; font-size: 12px; background: var(--background-primary); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--background-modifier-border); }
 .mind-atlas-toolbar button { padding: 0 8px; height: 22px; }
+.mind-atlas-toolbar-secondary { display: contents; }
+.mind-atlas-toolbar-more { display: none; }
+.mind-atlas-getting-started { display: none; position: absolute; z-index: 6; top: 48px; right: 8px; box-sizing: border-box; width: min(360px, calc(100% - 16px)); max-height: calc(100% - 56px); overflow: auto; padding: 12px 14px; color: var(--text-normal); background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 8px; font-size: var(--font-ui-small); }
+.mind-atlas-getting-started.is-open { display: block; }
+.mind-atlas-getting-started-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: var(--font-ui-medium); }
+.mind-atlas-getting-started ul { margin: 0; padding-left: 20px; }
+.mind-atlas-getting-started li + li { margin-top: 8px; }
+.mind-atlas-getting-started-heading button { padding: 0 8px; }
 
 .mind-atlas-container { padding: 0; overflow: hidden; overflow: clip; display: flex; flex-direction: column; height: 100%; }
 .mind-atlas-map { position: relative; flex: 1 1 0; min-height: 80px; overflow: hidden; overflow: clip; }
@@ -121,3 +129,10 @@
 
 .mind-atlas-editor { min-height: 0; }
 .mind-atlas-container.is-keyboard.is-editor-right > .mind-atlas-map, .mind-atlas-container.is-keyboard.is-editor-right > .mind-atlas-editor-pane { height: var(--ma-h) !important; max-height: none; }
+
+.is-mobile .mind-atlas-toolbar { right: 8px; max-width: calc(100% - 16px); box-sizing: border-box; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+.is-mobile .mind-atlas-toolbar::-webkit-scrollbar { display: none; }
+.is-mobile .mind-atlas-toolbar-depth-label { display: none; }
+.is-mobile .mind-atlas-toolbar-more { display: inline-block; }
+.is-mobile .mind-atlas-toolbar-secondary { display: none; position: absolute; top: 48px; right: 8px; z-index: 5; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 150px; padding: 10px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 8px; }
+.is-mobile .mind-atlas-toolbar-secondary.is-open { display: flex; }

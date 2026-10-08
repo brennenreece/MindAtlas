@@ -78,6 +78,10 @@ export class MindAtlasView extends ItemView {
   private debug = true;
   private debugBox?: HTMLInputElement;
   private editorBox: HTMLInputElement | null = null;
+  private moreButton!: HTMLButtonElement;
+  private morePanel!: HTMLElement;
+  private helpButton!: HTMLButtonElement;
+  private helpPanel!: HTMLElement;
   private selectedPath: string | null = null;
   private graph: MapGraph | null = null;
   private layouts = { radial: new Map<string, Pt>(), tree: new Map<string, Pt>(), free: new Map<string, Pt>() };
@@ -249,6 +253,7 @@ export class MindAtlasView extends ItemView {
     this.mapEl = this.contentEl.createDiv("mind-atlas-map");
     this.mapEl.tabIndex = 0;
     this.buildToolbar();
+    this.buildGettingStarted();
     this.buildPalette();
 
     this.svg = document.createElementNS(SVG_NS, "svg");
@@ -350,14 +355,40 @@ export class MindAtlasView extends ItemView {
 
   private buildToolbar() {
     const bar = this.contentEl.createDiv("mind-atlas-toolbar");
-    bar.createSpan({ text: "Depth" });
+    bar.createSpan({ cls: "mind-atlas-toolbar-depth-label", text: "Depth" });
     const minus = bar.createEl("button", { text: "−" });
+    minus.setAttr("aria-label", "Decrease map depth");
     this.depthLabel = bar.createSpan({ cls: "mind-atlas-depth", text: String(this.depth) });
     const plus = bar.createEl("button", { text: "+" });
+    plus.setAttr("aria-label", "Increase map depth");
     const label = bar.createEl("label");
     this.backlinkBox = label.createEl("input", { type: "checkbox" });
     label.appendText(" Backlinks");
-    const connLabel = bar.createEl("label", { attr: { title: "Also show linked notes that aren't children of anything" } });
+
+    this.helpButton = bar.createEl("button", {
+      text: "?",
+      attr: { "aria-label": "Getting started with MindAtlas", title: "Getting started" },
+    });
+    this.helpButton.addEventListener("click", () => this.toggleGettingStarted());
+    this.moreButton = bar.createEl("button", {
+      cls: "mind-atlas-toolbar-more",
+      text: "More",
+      attr: { "aria-expanded": "false" },
+    });
+    this.moreButton.addEventListener("click", () => {
+      const open = this.morePanel.hasClass("is-open");
+      this.morePanel.toggleClass("is-open", !open);
+      this.moreButton.setAttr("aria-expanded", String(!open));
+    });
+    this.morePanel = this.contentEl.createDiv("mind-atlas-toolbar-secondary");
+    this.registerDomEvent(this.contentEl, "pointerdown", (e) => {
+      if (e.target instanceof Node && !bar.contains(e.target) && !this.morePanel.contains(e.target)) {
+        this.morePanel.removeClass("is-open");
+        this.moreButton.setAttr("aria-expanded", "false");
+      }
+    });
+
+    const connLabel = this.morePanel.createEl("label", { attr: { title: "Also show linked notes that aren't children of anything" } });
     this.connBox = connLabel.createEl("input", { type: "checkbox" });
     connLabel.appendText(" All connections");
     this.connBox.onchange = () => {
@@ -373,7 +404,7 @@ export class MindAtlasView extends ItemView {
       this.app.workspace.requestSaveLayout();
     };
     if (Platform.isMobile) {
-      const dbLabel = bar.createEl("label", { attr: { title: "Show the layout debug readout" } });
+      const dbLabel = this.morePanel.createEl("label", { attr: { title: "Show the layout debug readout" } });
       this.debugBox = dbLabel.createEl("input", { type: "checkbox" });
       dbLabel.appendText(" Debug");
       this.debugBox.onchange = () => {
@@ -382,7 +413,7 @@ export class MindAtlasView extends ItemView {
         this.app.workspace.requestSaveLayout();
       };
     }
-    const boxLabel = bar.createEl("label");
+    const boxLabel = this.morePanel.createEl("label");
     this.boxBox = boxLabel.createEl("input", { type: "checkbox" });
     boxLabel.appendText(" Boxes");
     this.boxBox.onchange = () => {
@@ -390,7 +421,7 @@ export class MindAtlasView extends ItemView {
       void this.plugin.saveSettings();
     };
 
-    this.layoutBtn = bar.createEl("button");
+    this.layoutBtn = this.morePanel.createEl("button");
     this.layoutBtn.onclick = () => {
       const s = this.plugin.settings;
       s.layoutMode = s.layoutMode === "radial" ? "tree" : "radial";
@@ -404,6 +435,61 @@ export class MindAtlasView extends ItemView {
       void this.render(true);
     };
     this.syncToolbar();
+  }
+
+  private buildGettingStarted() {
+    this.helpPanel = this.mapEl.createDiv("mind-atlas-getting-started");
+    this.helpPanel.setAttr("role", "region");
+    this.helpPanel.setAttr("aria-label", "Getting started with MindAtlas");
+    const heading = this.helpPanel.createEl("div", { cls: "mind-atlas-getting-started-heading" });
+    heading.createEl("strong", { text: "Getting started" });
+    const close = heading.createEl("button", {
+      text: "×",
+      attr: { "aria-label": "Close getting started guide", title: "Close" },
+    });
+    close.addEventListener("click", () => this.closeGettingStarted());
+    const list = this.helpPanel.createEl("ul");
+    const tips = [
+      [
+        "Build",
+        Platform.isMobile
+          ? "Tap a node to open its menu and add a child. Choose Add note in the palette to place an unconnected note."
+          : "Tab adds a child and Enter adds a sibling. Choose Add note in the palette to place an unconnected note.",
+      ],
+      ["Edit", "Select or tap a node to edit its Markdown note. Changes autosave; frontmatter stays hidden."],
+      [
+        "Explore",
+        Platform.isMobile
+          ? "Drag empty space to pan. Use the palette's zoom and fit controls."
+          : "Drag empty space to pan. Scroll to pan; Cmd/Ctrl + scroll zooms. Use +, −, or 0 to zoom or fit.",
+      ],
+      ["Organize", "Drag a note onto another to choose Child or Connection. Drag it into empty space to position it."],
+      [
+        "Find and undo",
+        Platform.isMobile
+          ? "Use Find, Undo, and Redo in the palette."
+          : "Use Cmd/Ctrl + F to find a note and Cmd/Ctrl + Z to undo a map change.",
+      ],
+    ];
+    for (const [title, text] of tips) {
+      const item = list.createEl("li");
+      item.createEl("strong", { text: `${title}: ` });
+      item.appendText(text);
+    }
+    this.helpPanel.toggleClass("is-open", !this.plugin.settings.hasSeenGuide);
+    this.helpButton.setAttr("aria-expanded", String(!this.plugin.settings.hasSeenGuide));
+  }
+
+  private toggleGettingStarted() {
+    const open = !this.helpPanel.hasClass("is-open");
+    this.helpPanel.toggleClass("is-open", open);
+    this.helpButton.setAttr("aria-expanded", String(open));
+  }
+
+  private closeGettingStarted() {
+    this.helpPanel.removeClass("is-open");
+    this.helpButton.setAttr("aria-expanded", "false");
+    void this.plugin.markGettingStartedSeen();
   }
 
   private syncToolbar() {

@@ -13,6 +13,7 @@ Obsidian plugin that shows a mind map of the link graph around a note. No specia
 **Controls**
 - Click a note to edit it in the embedded editor (with `[[` autocomplete). Click a `[[link]]` in the editor to open it; an unresolved link creates the note first. Scroll to pan, Cmd/Ctrl+scroll to zoom.
 - **Keyboard** (map focused): arrows navigate (Up = parent, Down = first child, Left/Right = previous/next in the same generation); **Tab** = new child; **Enter** = new sibling; **F2** = rename; **Space** = collapse/expand; **Delete** = delete; **R** or double-click = make the note the center; **+ / − / 0** = zoom / fit; **Cmd/Ctrl+Z**, **Shift+Z** = undo/redo; **Cmd/Ctrl+F** = find a note.
+- The **?** button opens a getting-started guide. On mobile, less-used controls are grouped under **More**.
 - **Hover menu** (tap on touch devices): add child, rename, make center, link, color (Kelly's 22 colors), more…, delete.
 - **Right-click menu:** rename, re-root, collapse, open in a tab, color, icon, copy branch as outline. Color and icon are stored in frontmatter (`mindmap-color`, `mindmap-icon`; colors are inherited by descendants). The hover menu's icon button opens a palette of Feather-style icons, shown centered above the node in the node's color (size set in Settings → Icon size); `mindmap-icon` can also hold an emoji, which is shown before the title. An old `mindmap-status` is shown as an icon.
 - **Re-parent or connect:** drag a note onto another note (or use the Link tool, or drag a file from the sidebar onto a node), then choose **Child** or **Connection**. Child puts it under the target's `## Children`; Connection leaves the note where it is and adds a link under `## Connections` (a dashed line).
@@ -32,4 +33,4 @@ In tree mode each side of a note takes at most one line (extras go to the top); 
 
 ## Testing on iPhone / iPad
 
-Keep the vault in iCloud Drive, then run `./deploy.sh "/path/to/Vault"` to build and copy `main.js`, `manifest.json` and `styles.css` into `.obsidian/plugins/mind-atlas/`. On the device, enable the plugin under Settings → Community plugins (turn Restricted mode off) and reload Obsidian after each deploy.
+Install MindAtlas through BRAT using the `brennenreece/MindAtlas` repository, then reload Obsidian after BRAT updates the plugin. For local development, use the build and vault-symlink steps above.

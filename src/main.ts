@@ -45,6 +45,17 @@ export default class MindAtlasPlugin extends Plugin {
       .forEach((l) => (l.view as MindAtlasView).refreshAppearance());
   }
 
+  async markGettingStartedSeen() {
+    if (this.settings.hasSeenGuide) return;
+    this.settings.hasSeenGuide = true;
+    try {
+      await this.saveData(this.settings);
+    } catch (err) {
+      this.settings.hasSeenGuide = false;
+      new Notice(`MindAtlas: could not save guide preference (${(err as Error).message})`);
+    }
+  }
+
   private async openMap(file: TFile | null) {
     if (!file || file.extension !== "md") {
       new Notice("MindAtlas: open a markdown note first.");
