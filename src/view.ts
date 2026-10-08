@@ -202,7 +202,9 @@ export class MindAtlasView extends ItemView {
       const r = el.getBoundingClientRect();
       const visibleBottom = vv.offsetTop + vv.height;
       const kb = editing();
-      dbg.setText(`vv ${Math.round(vv.height)} top ${Math.round(vv.offsetTop)} | win ${window.innerHeight} | view top ${Math.round(r.top)} h ${Math.round(r.height)} | edit ${kb}`);
+      const rc = (e: Element | null) => { if (!e) return "-"; const b = e.getBoundingClientRect(); return `${Math.round(b.top)}/${Math.round(b.height)}`; };
+      const g = this.group.getAttribute("transform") ?? "none";
+      dbg.setText(`map ${rc(this.mapEl)} svg ${rc(this.svg)} ed ${rc(this.contentEl.querySelector(".mind-atlas-editor-pane"))} sc ${this.mapEl.scrollTop},${this.mapEl.scrollLeft},${el.scrollTop} kb ${el.hasClass("is-keyboard")} g ${g} | vv ${Math.round(vv.height)} top ${Math.round(vv.offsetTop)} | win ${window.innerHeight} | view top ${Math.round(r.top)} h ${Math.round(r.height)} | edit ${kb}`);
       if (!kb) return release();
       const natural = window.innerHeight - r.top;
       if (visibleBottom > natural - 40) return release();
