@@ -204,7 +204,9 @@ export class MindAtlasView extends ItemView {
       const kb = editing();
       const rc = (e: Element | null) => { if (!e) return "-"; const b = e.getBoundingClientRect(); return `${Math.round(b.top)}/${Math.round(b.height)}`; };
       const g = this.group.getAttribute("transform") ?? "none";
-      dbg.setText(`map ${rc(this.mapEl)} svg ${rc(this.svg)} ed ${rc(this.contentEl.querySelector(".mind-atlas-editor-pane"))} sc ${this.mapEl.scrollTop},${this.mapEl.scrollLeft},${el.scrollTop} kb ${el.hasClass("is-keyboard")} g ${g} | vv ${Math.round(vv.height)} top ${Math.round(vv.offsetTop)} | win ${window.innerHeight} | view top ${Math.round(r.top)} h ${Math.round(r.height)} | edit ${kb}`);
+      const cs = getComputedStyle(el), ms = getComputedStyle(this.mapEl);
+      const info = `el ${cs.display}/${cs.flexDirection}/${cs.height}/${cs.position} cls ${el.className.replace(/mind-atlas-|view-content/g, "")} par ${el.parentElement?.className}/${Math.round(el.parentElement?.getBoundingClientRect().height ?? 0)} map ${ms.display}/${ms.height}/${ms.flex} kids ${el.children.length}`;
+      dbg.setText(info + ` | map ${rc(this.mapEl)} svg ${rc(this.svg)} ed ${rc(this.contentEl.querySelector(".mind-atlas-editor-pane"))} sc ${this.mapEl.scrollTop},${this.mapEl.scrollLeft},${el.scrollTop} kb ${el.hasClass("is-keyboard")} g ${g} | vv ${Math.round(vv.height)} top ${Math.round(vv.offsetTop)} | win ${window.innerHeight} | view top ${Math.round(r.top)} h ${Math.round(r.height)} | edit ${kb}`);
       if (!kb) return release();
       const natural = window.innerHeight - r.top;
       if (visibleBottom > natural - 40) return release();
