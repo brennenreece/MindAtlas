@@ -178,6 +178,23 @@ export class MindAtlasView extends ItemView {
     };
   }
 
+  /**
+   * iOS scrolls overflow-hidden containers to reveal a focused field, which slides the map
+   * out of view when the keyboard opens. Nothing here should ever scroll, so undo it.
+   */
+  private keepInPlace() {
+    const reset = (e: Event) => {
+      const t = e.target;
+      if (!(t instanceof HTMLElement)) return;
+      if (t === this.contentEl || t === this.mapEl || t === this.editorPane || t.contains(this.contentEl)) {
+        t.scrollTop = 0;
+        t.scrollLeft = 0;
+      }
+    };
+    this.registerDomEvent(document, "scroll", reset, true);
+    this.registerDomEvent(window, "scroll", () => window.scrollTo(0, 0));
+  }
+
   async onOpen() {
     this.contentEl.empty();
     this.contentEl.addClass("mind-atlas-container");
@@ -196,6 +213,7 @@ export class MindAtlasView extends ItemView {
     this.bindFileDrop();
     this.buildEditorPane();
     this.applyEditorLayout();
+    this.keepInPlace();
     this.registerDomEvent(this.mapEl, "keydown", (e) => this.onKey(e));
 
     const refresh = () => this.scheduleRefresh();
