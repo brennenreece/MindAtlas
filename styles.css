@@ -1,0 +1,114 @@
+.mind-atlas-svg { width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.mind-atlas-node { cursor: pointer; }
+.mind-atlas-node text { fill: var(--text-normal); font-size: 13px; pointer-events: none; }
+.mind-atlas-more { fill: var(--text-muted); font-size: 16px; }
+.mind-atlas-empty { fill: var(--text-muted); }
+.mind-atlas-toolbar { position: absolute; top: 8px; left: 8px; z-index: 2; display: flex; gap: 6px; align-items: center; font-size: 12px; background: var(--background-primary); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--background-modifier-border); }
+.mind-atlas-toolbar button { padding: 0 8px; height: 22px; }
+
+.mind-atlas-container { padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 100%; }
+.mind-atlas-map { position: relative; flex: 1 1 0; min-height: 80px; overflow: hidden; }
+.mind-atlas-divider { flex: 0 0 6px; cursor: row-resize; background: var(--background-modifier-border); touch-action: none; }
+.mind-atlas-divider:hover { background: var(--interactive-accent); }
+.mind-atlas-editor-pane { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 80px; background: var(--background-primary); }
+.mind-atlas-editor-pane input.mind-atlas-editor-title,
+.mind-atlas-editor-pane input.mind-atlas-editor-title:hover,
+.mind-atlas-editor-pane input.mind-atlas-editor-title:focus,
+.mind-atlas-editor-pane input.mind-atlas-editor-title:active { display: block; width: 100%; height: auto; box-sizing: border-box; margin: 0; padding: 8px 12px 2px; font-size: var(--h1-size, 2em); font-weight: var(--h1-weight, 700); line-height: var(--h1-line-height, 1.2); font-family: var(--h1-font, var(--font-text)); color: var(--h1-color, var(--text-normal)); background: transparent; border: 0; border-radius: 0; outline: none; box-shadow: none; }
+.mind-atlas-editor { flex: 1 1 auto; overflow: auto; }
+.mind-atlas-editor .cm-editor { height: 100%; font-family: var(--font-text); font-size: var(--font-text-size); color: var(--text-normal); }
+.mind-atlas-editor .cm-editor.cm-focused { outline: none; }
+.mind-atlas-editor .cm-scroller { padding: 8px 12px; line-height: 1.5; font-family: inherit; }
+.mind-atlas-editor .cm-cursor { border-left-color: var(--text-normal); }
+.mind-atlas-editor .cm-selectionBackground, .mind-atlas-editor .cm-editor ::selection { background: var(--text-selection); }
+.ma-h { font-weight: 700; color: var(--text-normal); }
+.ma-h1 { font-size: 1.6em; } .ma-h2 { font-size: 1.4em; } .ma-h3 { font-size: 1.2em; }
+.ma-bold { font-weight: 700; }
+.ma-italic { font-style: italic; }
+.ma-code { font-family: var(--font-monospace); background: var(--code-background); border-radius: 3px; }
+.ma-link { color: var(--link-color); cursor: pointer; }
+.ma-list { color: var(--text-accent); }
+.ma-quote { color: var(--text-muted); border-left: 2px solid var(--text-faint); padding-left: 8px; }
+.mind-atlas-edge { fill: none; stroke: var(--text-faint); stroke-width: 1.5; stroke-linecap: round; }
+.mind-atlas-cross { fill: none; stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 5 4; opacity: 0.75; }
+.mind-atlas-arrowhead { fill: var(--text-muted); fill: context-stroke; }
+.mind-atlas-node { cursor: grab; }
+.mind-atlas-node:active { cursor: grabbing; }
+.mind-atlas-node:hover rect { filter: brightness(1.12); }
+.mind-atlas-node.is-selected rect { stroke: var(--interactive-accent); stroke-width: 3; }
+.ma-no-boxes .mind-atlas-node:hover text,
+.ma-no-boxes .mind-atlas-node.is-selected text { fill: var(--text-accent); }
+.mind-atlas-edge-fill { fill: var(--text-faint); stroke: none; }
+.mind-atlas-edge { stroke: var(--text-muted); }
+.mind-atlas-edge-fill { fill: var(--text-muted); }
+.mind-atlas-head { fill: var(--text-muted); stroke: none; pointer-events: none; }
+.mind-atlas-edge.is-back, .mind-atlas-cross.is-back { stroke: var(--text-faint); opacity: 0.5; }
+.mind-atlas-edge-fill.is-back, .mind-atlas-head.is-back { fill: var(--text-faint); opacity: 0.5; }
+.mind-atlas-node.is-back text { fill: var(--text-faint); }
+
+.mind-atlas-map:focus { outline: none; }
+.mind-atlas-svg[data-tool="add"] { cursor: crosshair; }
+.mind-atlas-svg[data-tool="link"] { cursor: alias; }
+.mind-atlas-svg[data-tool="add"] .mind-atlas-node, .mind-atlas-svg[data-tool="link"] .mind-atlas-node { cursor: crosshair; }
+.mind-atlas-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
+.mind-atlas-edge.is-selected, .mind-atlas-cross.is-selected { stroke: var(--interactive-accent); opacity: 1; stroke-width: 3; }
+.mind-atlas-edge-fill.is-selected, .mind-atlas-head.is-selected { fill: var(--interactive-accent); opacity: 1; }
+.mind-atlas-preview { fill: none; stroke: var(--interactive-accent); stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
+.mind-atlas-node.is-drop-target rect { stroke: var(--interactive-accent); stroke-width: 3; }
+.mind-atlas-palette { position: absolute; top: 48px; left: 8px; z-index: 2; display: flex; flex-direction: column; gap: 2px; padding: 3px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; }
+.mind-atlas-palette button.is-active { background: var(--interactive-accent); color: var(--text-on-accent); }
+.mind-atlas-menu { position: absolute; z-index: 3; display: flex; gap: 2px; padding: 3px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; }
+.mind-atlas-menu button { width: 30px; height: 30px; }
+.mind-atlas-menu button.is-hidden { display: none; }
+.mind-atlas-name-input { width: 100%; margin-bottom: 12px; }
+
+.is-dragging-node .mind-atlas-node:not(.is-dragged) { opacity: 0.35; }
+.is-dragging-node .mind-atlas-node.is-drop-target, .is-dragging-node .mind-atlas-node.is-drop-invalid { opacity: 1; }
+.is-dragging-node .mind-atlas-edge, .is-dragging-node .mind-atlas-cross, .is-dragging-node .mind-atlas-edge-fill, .is-dragging-node .mind-atlas-head { opacity: 0.25; }
+.mind-atlas-node.is-dragged { opacity: 0.8; }
+.mind-atlas-node.is-drop-invalid rect { stroke: var(--text-error); stroke-width: 3; }
+.is-dragging-node .mind-atlas-node { cursor: grabbing; }
+.mind-atlas-drag-label { position: absolute; z-index: 4; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: 4px; background: var(--interactive-accent); color: var(--text-on-accent); font-size: 12px; white-space: nowrap; pointer-events: none; }
+.mind-atlas-drag-label.is-invalid { background: var(--text-error); color: #fff; }
+
+.mind-atlas-palette-sep { height: 1px; margin: 3px 2px; background: var(--background-modifier-border); }
+.mind-atlas-inline { position: absolute; z-index: 5; min-width: 4ch; padding: 0 2px; outline: none; white-space: pre; font-weight: 700; color: var(--text-normal); border-bottom: 1.5px solid var(--interactive-accent); caret-color: var(--interactive-accent); }
+.mind-atlas-inline:empty::before { content: attr(data-placeholder); color: var(--text-faint); pointer-events: none; }
+
+/* Collapse / depth badge */
+.mind-atlas-more { font-size: 11px; fill: var(--text-muted); pointer-events: none; }
+.mind-atlas-cross.is-hidden, .mind-atlas-hit.is-hidden, .mind-atlas-head.is-hidden { display: none; }
+
+/* Palette wraps into columns when the map is short */
+.mind-atlas-palette { flex-wrap: wrap; max-height: calc(100% - 24px); align-content: flex-start; }
+.mind-atlas-inline.is-rename { background: var(--background-primary); border-radius: 6px; padding: 2px 8px; outline: 1px solid var(--interactive-accent); }
+
+.mind-atlas-swatches { display: none; position: absolute; top: 100%; left: 0; margin-top: 4px; padding: 6px; gap: 6px; grid-template-columns: repeat(8, 22px); background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; }
+.mind-atlas-swatches.is-open { display: grid; }
+.mind-atlas-menu .mind-atlas-swatch { width: 22px; height: 22px; min-width: 0; padding: 0; border-radius: 50%; border: 2px solid var(--background-modifier-border); }
+.mind-atlas-menu .mind-atlas-swatch.is-auto { background: var(--background-secondary); display: flex; align-items: center; justify-content: center; }
+.mind-atlas-swatch.is-auto svg { width: 12px; height: 12px; }
+
+/* Editor docked to the right of the map */
+.mind-atlas-container.is-editor-right { flex-direction: row; }
+.mind-atlas-container.is-editor-right .mind-atlas-map { min-width: 160px; min-height: 0; }
+.mind-atlas-container.is-editor-right .mind-atlas-divider { flex: 0 0 6px; cursor: col-resize; }
+.mind-atlas-container.is-editor-right .mind-atlas-editor-pane { min-width: 200px; min-height: 0; height: auto; }
+
+.mind-atlas-badge { stroke: currentColor; fill: none; pointer-events: none; }
+.mind-atlas-icons { display: none; position: absolute; top: 100%; left: 0; margin-top: 4px; padding: 6px; gap: 2px; width: 260px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; max-height: 260px; overflow-y: auto; }
+.mind-atlas-icons.is-open { display: block; }
+.mind-atlas-icons-grid { display: grid; grid-template-columns: repeat(8, 28px); gap: 2px; }
+.mind-atlas-icons-title { margin: 8px 0 3px; font-size: var(--font-ui-smaller); font-weight: 600; color: var(--text-muted); }
+.mind-atlas-icons-title:first-of-type { margin-top: 0; }
+.mind-atlas-menu .mind-atlas-iconbtn { width: 28px; height: 28px; }
+
+.mind-atlas-choice { position: absolute; z-index: 5; transform: translateX(-50%); display: flex; gap: 6px; padding: 6px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 8px; }
+.mind-atlas-zone { display: flex; align-items: center; gap: 6px; padding: 10px 16px; border: 2px dashed var(--background-modifier-border); border-radius: 6px; background: transparent; color: var(--text-normal); cursor: pointer; }
+.mind-atlas-zone:hover { border-color: var(--interactive-accent); background: var(--background-secondary); }
+.mind-atlas-zone svg { width: 16px; height: 16px; }
+.ma-strike { text-decoration: line-through; }
+.ma-highlight { background: var(--text-highlight-bg); }
+.ma-bullet { color: var(--text-accent); padding-right: 2px; }
+.ma-codeblock { font-family: var(--font-monospace); background: var(--code-background); }
+.ma-h4 { font-size: 1.1em; } .ma-h5, .ma-h6 { font-size: 1em; }
