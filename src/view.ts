@@ -78,9 +78,6 @@ export class MindAtlasView extends ItemView {
   private debug = true;
   private debugBox?: HTMLInputElement;
   private editorBox: HTMLInputElement | null = null;
-  private moreButton!: HTMLButtonElement;
-  private morePanel!: HTMLElement;
-  private helpButton!: HTMLButtonElement;
   private helpPanel!: HTMLElement;
   private selectedPath: string | null = null;
   private graph: MapGraph | null = null;
@@ -355,40 +352,15 @@ export class MindAtlasView extends ItemView {
 
   private buildToolbar() {
     const bar = this.contentEl.createDiv("mind-atlas-toolbar");
-    bar.createSpan({ cls: "mind-atlas-toolbar-depth-label", text: "Depth" });
+    bar.createSpan({ text: "Depth" });
     const minus = bar.createEl("button", { text: "−" });
-    minus.setAttr("aria-label", "Decrease map depth");
     this.depthLabel = bar.createSpan({ cls: "mind-atlas-depth", text: String(this.depth) });
     const plus = bar.createEl("button", { text: "+" });
-    plus.setAttr("aria-label", "Increase map depth");
     const label = bar.createEl("label");
     this.backlinkBox = label.createEl("input", { type: "checkbox" });
     label.appendText(" Backlinks");
 
-    this.helpButton = bar.createEl("button", {
-      text: "?",
-      attr: { "aria-label": "Getting started with MindAtlas", title: "Getting started" },
-    });
-    this.helpButton.addEventListener("click", () => this.toggleGettingStarted());
-    this.moreButton = bar.createEl("button", {
-      cls: "mind-atlas-toolbar-more",
-      text: "More",
-      attr: { "aria-expanded": "false" },
-    });
-    this.moreButton.addEventListener("click", () => {
-      const open = this.morePanel.hasClass("is-open");
-      this.morePanel.toggleClass("is-open", !open);
-      this.moreButton.setAttr("aria-expanded", String(!open));
-    });
-    this.morePanel = this.contentEl.createDiv("mind-atlas-toolbar-secondary");
-    this.registerDomEvent(this.contentEl, "pointerdown", (e) => {
-      if (e.target instanceof Node && !bar.contains(e.target) && !this.morePanel.contains(e.target)) {
-        this.morePanel.removeClass("is-open");
-        this.moreButton.setAttr("aria-expanded", "false");
-      }
-    });
-
-    const connLabel = this.morePanel.createEl("label", { attr: { title: "Also show linked notes that aren't children of anything" } });
+    const connLabel = bar.createEl("label", { attr: { title: "Also show linked notes that aren't children of anything" } });
     this.connBox = connLabel.createEl("input", { type: "checkbox" });
     connLabel.appendText(" All connections");
     this.connBox.onchange = () => {
@@ -404,7 +376,7 @@ export class MindAtlasView extends ItemView {
       this.app.workspace.requestSaveLayout();
     };
     if (Platform.isMobile) {
-      const dbLabel = this.morePanel.createEl("label", { attr: { title: "Show the layout debug readout" } });
+      const dbLabel = bar.createEl("label", { attr: { title: "Show the layout debug readout" } });
       this.debugBox = dbLabel.createEl("input", { type: "checkbox" });
       dbLabel.appendText(" Debug");
       this.debugBox.onchange = () => {
@@ -413,7 +385,7 @@ export class MindAtlasView extends ItemView {
         this.app.workspace.requestSaveLayout();
       };
     }
-    const boxLabel = this.morePanel.createEl("label");
+    const boxLabel = bar.createEl("label");
     this.boxBox = boxLabel.createEl("input", { type: "checkbox" });
     boxLabel.appendText(" Boxes");
     this.boxBox.onchange = () => {
@@ -421,7 +393,7 @@ export class MindAtlasView extends ItemView {
       void this.plugin.saveSettings();
     };
 
-    this.layoutBtn = this.morePanel.createEl("button");
+    this.layoutBtn = bar.createEl("button");
     this.layoutBtn.onclick = () => {
       const s = this.plugin.settings;
       s.layoutMode = s.layoutMode === "radial" ? "tree" : "radial";
@@ -477,18 +449,14 @@ export class MindAtlasView extends ItemView {
       item.appendText(text);
     }
     this.helpPanel.toggleClass("is-open", !this.plugin.settings.hasSeenGuide);
-    this.helpButton.setAttr("aria-expanded", String(!this.plugin.settings.hasSeenGuide));
   }
 
-  private toggleGettingStarted() {
-    const open = !this.helpPanel.hasClass("is-open");
-    this.helpPanel.toggleClass("is-open", open);
-    this.helpButton.setAttr("aria-expanded", String(open));
+  openGettingStarted() {
+    this.helpPanel.addClass("is-open");
   }
 
   private closeGettingStarted() {
     this.helpPanel.removeClass("is-open");
-    this.helpButton.setAttr("aria-expanded", "false");
     void this.plugin.markGettingStartedSeen();
   }
 

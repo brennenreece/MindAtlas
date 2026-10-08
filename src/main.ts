@@ -29,6 +29,17 @@ export default class MindAtlasPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "show-getting-started",
+      name: "Show getting started guide",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(MindAtlasView);
+        if (!view) return false;
+        if (!checking) view.openGettingStarted();
+        return true;
+      },
+    });
+
     this.addRibbonIcon("git-fork", "MindAtlas: open map for current note", () =>
       this.openMap(this.app.workspace.getActiveFile())
     );
