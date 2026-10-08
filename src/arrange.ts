@@ -133,6 +133,7 @@ function arrangeTree(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: numb
   }
 }
 const ROOT_ANGLE = -Math.PI / 2;
+const TAU = Math.PI * 2;
 
 function boxesTouch(a: Box, b: Box, pad: number) {
   return Math.abs(a.x - b.x) < (a.w + b.w) / 2 + pad && Math.abs(a.y - b.y) < (a.h + b.h) / 2 + pad;
@@ -140,6 +141,7 @@ function boxesTouch(a: Box, b: Box, pad: number) {
 
 function arrangeRadial(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: number, crossLinks: Edge[]) {
   const angle = new Map<MapNode, number>();
+  const sector = new Map<MapNode, [number, number]>();
   const weight = new Map<MapNode, number>();
   const links = new Map<MapNode, number>();
   for (const edge of crossLinks) {
@@ -159,6 +161,7 @@ function arrangeRadial(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: nu
 
   const assign = (n: MapNode, start: number, end: number) => {
     angle.set(n, (start + end) / 2);
+    sector.set(n, [start, end]);
     const children = kids.get(n) ?? [];
     const total = children.reduce((sum, child) => sum + weight.get(child)!, 0) || 1;
     let cursor = start;
@@ -190,6 +193,7 @@ function arrangeRadial(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: nu
     spread(rootKids, ROOT_ANGLE, ROOT_ANGLE + Math.PI * 2);
   }
 
+  sector.set(root, [ROOT_ANGLE, ROOT_ANGLE + TAU]);
   let level = rootKids;
   let radius = 0;
   let previousOuter = Math.hypot(root.w / 2, root.h / 2);
@@ -222,6 +226,7 @@ function arrangeRadial(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: nu
     previousOuter = outer;
     level = level.flatMap((n) => kids.get(n) ?? []);
   }
+  settleRadial(root, kids, sector, angle, spacing, crossLinks);
 }
 
 function hasOverlaps(boxes: Box[], pad: number) {
@@ -253,4 +258,148 @@ function minimumRingRadius(nodes: MapNode[], angles: Map<MapNode, number>, pad: 
     }
   }
   return radius;
+}
+
+function settleRadial(
+  root: MapNode,
+  kids: Map<MapNode, MapNode[]>,
+  sectors: Map<MapNode, [number, number]>,
+  angles: Map<MapNode, number>,
+  spacing: number,
+  crossLinks: Edge[]
+) {
+  const nodes: MapNode[] = [];
+  const parent = new Map<MapNode, MapNode>();
+  const visit = (n: MapNode) => {
+    for (const child of kids.get(n) ?? []) {
+      nodes.push(child);
+      parent.set(child, n);
+      visit(child);
+    }
+  };
+  visit(root);
+  if (!nodes.length) return;
+
+  const velocities = new Map(nodes.map((n) => [n, { x: 0, y: 0 }]));
+  const forces = new Map<MapNode, Pt>();
+  const position = new Map<MapNode, Pt>(nodes.map((n) => [n, { x: n.bx, y: n.by }]));
+  position.set(root, { x: 0, y: 0 });
+  const clearance = Math.max(8, Math.min(28, spacing * 0.35));
+  const cellSize = Math.max(...nodes.map((n) => Math.max(n.w, n.h))) + clearance;
+  const index = new Map(nodes.map((n, i) => [n, i]));
+  const treeLinks = nodes.map((n) => ({ from: parent.get(n)!, to: n }));
+  const crossSprings = crossLinks.filter((e) => sectors.has(e.from) && sectors.has(e.to));
+  const add = (n: MapNode, x: number, y: number) => {
+    if (n === root) return;
+    const f = forces.get(n)!;
+    f.x += x;
+    f.y += y;
+  };
+  const radius = (n: MapNode) => Math.hypot(n.w / 2, n.h / 2);
+
+  const steps = nodes.length > 800 ? 100 : 160;
+  for (let step = 0; step < steps; step++) {
+    for (const n of nodes) forces.set(n, { x: 0, y: 0 });
+
+    for (const { from, to } of treeLinks) {
+      const a = position.get(from)!;
+      const b = position.get(to)!;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const length = Math.hypot(dx, dy) || 1;
+      const target = radius(from) + radius(to) + spacing * 0.55;
+      const force = (length - target) * 0.028;
+      add(to, -dx / length * force, -dy / length * force);
+      if (from !== root) add(from, dx / length * force, dy / length * force);
+    }
+
+    for (const { from, to } of crossSprings) {
+      const a = position.get(from)!;
+      const b = position.get(to)!;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const length = Math.hypot(dx, dy) || 1;
+      const target = (radius(from) + radius(to) + spacing) * 2;
+      const force = Math.max(0, length - target) * 0.004;
+      add(to, -dx / length * force, -dy / length * force);
+      add(from, dx / length * force, dy / length * force);
+    }
+
+    const cells = new Map<string, MapNode[]>();
+    for (const n of nodes) {
+      const p = position.get(n)!;
+      const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)}`;
+      const cell = cells.get(key) ?? [];
+      cell.push(n);
+      cells.set(key, cell);
+    }
+    for (const a of nodes) {
+      const pa = position.get(a)!;
+      const cx = Math.floor(pa.x / cellSize);
+      const cy = Math.floor(pa.y / cellSize);
+      for (let ox = -1; ox <= 1; ox++) {
+        for (let oy = -1; oy <= 1; oy++) {
+          for (const b of cells.get(`${cx + ox},${cy + oy}`) ?? []) {
+            if (index.get(b)! <= index.get(a)!) continue;
+            const pb = position.get(b)!;
+            const dx = pb.x - pa.x;
+            const dy = pb.y - pa.y;
+            const overlapX = (a.w + b.w) / 2 + clearance - Math.abs(dx);
+            const overlapY = (a.h + b.h) / 2 + clearance - Math.abs(dy);
+            if (overlapX <= 0 || overlapY <= 0) continue;
+            const force = Math.max(overlapX, overlapY) * 20;
+            const distance = Math.hypot(dx, dy) || 1;
+            add(a, -dx / distance * force, -dy / distance * force);
+            add(b, dx / distance * force, dy / distance * force);
+          }
+        }
+      }
+    }
+
+    const cooling = 1 - step / steps;
+    const maxMove = Math.max(1.5, spacing * (0.08 + cooling * 0.2));
+    for (const n of nodes) {
+      const p = position.get(n)!;
+      const v = velocities.get(n)!;
+      const f = forces.get(n)!;
+      let vx = (v.x + f.x - p.x * 0.0012) * 0.72;
+      let vy = (v.y + f.y - p.y * 0.0012) * 0.72;
+      const speed = Math.hypot(vx, vy);
+      if (speed > maxMove) {
+        vx *= maxMove / speed;
+        vy *= maxMove / speed;
+      }
+
+      let x = p.x + vx;
+      let y = p.y + vy;
+      const [start, end] = sectors.get(n)!;
+      const center = angles.get(n)!;
+      const angularSlack = (end - start) * 0.15;
+      const theta = clampToSector(Math.atan2(y, x), center - angularSlack, center + angularSlack);
+      let dist = Math.hypot(x, y);
+      const parentNode = parent.get(n)!;
+      const parentPos = position.get(parentNode)!;
+      const minimumRadius = Math.hypot(parentPos.x, parentPos.y) + radius(parentNode) + radius(n) + clearance * 0.35;
+      dist = Math.max(dist, minimumRadius);
+      x = Math.cos(theta) * dist;
+      y = Math.sin(theta) * dist;
+      position.set(n, { x, y });
+      velocities.set(n, { x: vx, y: vy });
+    }
+  }
+
+  for (const n of nodes) {
+    const p = position.get(n)!;
+    n.bx = p.x;
+    n.by = p.y;
+  }
+}
+
+function clampToSector(angle: number, start: number, end: number) {
+  if (end - start >= TAU - 1e-6) return angle;
+  const relative = ((angle - start) % TAU + TAU) % TAU;
+  if (relative <= end - start) return angle;
+  const toStart = Math.abs(Math.atan2(Math.sin(angle - start), Math.cos(angle - start)));
+  const toEnd = Math.abs(Math.atan2(Math.sin(angle - end), Math.cos(angle - end)));
+  return toStart <= toEnd ? start : end;
 }

@@ -141,6 +141,8 @@ test("radial sectors produce deterministic, separated nodes and non-crossing tre
   assertNoOverlaps(nodes);
   assert.equal(countTreeCrossings(edges), 0);
   assert.equal(treeEdgesHitOtherBoxes(edges, nodes), 0);
+  const longestEdge = Math.max(...edges.map((e) => Math.hypot(e.to.bx - e.from.bx, e.to.by - e.from.by)));
+  assert.ok(longestEdge < 300, `linked nodes should settle closer than the old fixed ring layout (max: ${longestEdge})`);
 });
 
 test("radial layout keeps backlinks opposite outgoing root branches", () => {
