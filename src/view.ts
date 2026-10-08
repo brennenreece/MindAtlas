@@ -2175,7 +2175,7 @@ export class MindAtlasView extends ItemView {
       const sizes = this.plugin.settings.headingSizes;
       const px = sizes[Math.min(depth, sizes.length - 1)];
       // Hide the editor while typing so the on-screen keyboard leaves room for the map.
-      this.contentEl.addClass("is-prompting");
+      if (!this.contentEl.hasClass("is-editor-right")) this.contentEl.addClass("is-prompting");
       const el = this.mapEl.createDiv("mind-atlas-inline");
       el.setAttr("data-placeholder", "type here");
       el.setAttr("contenteditable", "plaintext-only");
@@ -2194,6 +2194,7 @@ export class MindAtlasView extends ItemView {
         this.contentEl.removeClass("is-prompting");
         window.visualViewport?.removeEventListener("resize", reveal);
         window.visualViewport?.removeEventListener("scroll", reveal);
+        ro.disconnect();
         restore();
         this.mapEl.focus({ preventScroll: true });
         resolve(v && v.trim() ? v.trim() : null);
@@ -2226,6 +2227,9 @@ export class MindAtlasView extends ItemView {
       };
       window.visualViewport?.addEventListener("resize", reveal);
       window.visualViewport?.addEventListener("scroll", reveal);
+      // Re-center the moment the keyboard shrinks the map, instead of waiting on timers.
+      const ro = new ResizeObserver(reveal);
+      ro.observe(this.mapEl);
       el.addEventListener("keydown", (e) => {
         e.stopPropagation();
         if (e.key === "Enter") {
@@ -2246,6 +2250,7 @@ export class MindAtlasView extends ItemView {
       window.setTimeout(() => {
         el.focus({ preventScroll: true });
         reveal();
+        window.setTimeout(reveal, 100);
         window.setTimeout(reveal, 350);
         window.setTimeout(reveal, 800);
         if (initial !== undefined) document.getSelection()?.selectAllChildren(el);
