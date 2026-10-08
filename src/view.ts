@@ -48,6 +48,7 @@ interface ViewState extends Record<string, unknown> {
   backlinks?: boolean;
   extras?: string[];
   collapsed?: string[];
+  editorHidden?: boolean;
 }
 
 const pairKey = (a: MapNode, b: MapNode) =>
@@ -72,6 +73,8 @@ export class MindAtlasView extends ItemView {
   private editorTitle!: HTMLInputElement;
   private editorHeight = 280;
   private editorWidth = 400;
+  private editorHidden = false;
+  private editorBox: HTMLInputElement | null = null;
   private selectedPath: string | null = null;
   private graph: MapGraph | null = null;
   private layouts = { radial: new Map<string, Pt>(), tree: new Map<string, Pt>(), free: new Map<string, Pt>() };
@@ -151,6 +154,7 @@ export class MindAtlasView extends ItemView {
     }
     if (typeof state?.depth === "number") this.depth = state.depth;
     if (typeof state?.backlinks === "boolean") this.backlinks = state.backlinks;
+    if (typeof state?.editorHidden === "boolean") this.editorHidden = state.editorHidden;
     if (Array.isArray(state?.extras)) {
       this.extras = state.extras.filter((x): x is string => typeof x === "string");
     }
@@ -169,6 +173,7 @@ export class MindAtlasView extends ItemView {
       depth: this.depth,
       backlinks: this.backlinks,
       extras: this.extras,
+      editorHidden: this.editorHidden,
       collapsed: [...this.collapsed],
     };
   }
@@ -293,6 +298,14 @@ export class MindAtlasView extends ItemView {
       this.plugin.settings.showConnections = this.connBox!.checked;
       void this.plugin.saveSettings();
     };
+    const edLabel = bar.createEl("label", { attr: { title: "Show or hide the note editor" } });
+    this.editorBox = edLabel.createEl("input", { type: "checkbox" });
+    edLabel.appendText(" Editor");
+    this.editorBox.onchange = () => {
+      this.editorHidden = !this.editorBox!.checked;
+      this.syncToolbar();
+      this.app.workspace.requestSaveLayout();
+    };
     const boxLabel = bar.createEl("label");
     this.boxBox = boxLabel.createEl("input", { type: "checkbox" });
     boxLabel.appendText(" Boxes");
@@ -322,6 +335,8 @@ export class MindAtlasView extends ItemView {
     if (this.backlinkBox) this.backlinkBox.checked = this.backlinks;
     this.layoutBtn?.setText(this.plugin.settings.layoutMode === "radial" ? "Radial" : "Tree");
     if (this.boxBox) this.boxBox.checked = this.plugin.settings.showBoxes;
+    if (this.editorBox) this.editorBox.checked = !this.editorHidden;
+    this.contentEl.toggleClass("is-editor-hidden", this.editorHidden);
     if (this.connBox) this.connBox.checked = this.plugin.settings.showConnections;
   }
 
@@ -2079,6 +2094,8 @@ export class MindAtlasView extends ItemView {
     return new Promise((resolve) => {
       const sizes = this.plugin.settings.headingSizes;
       const px = sizes[Math.min(depth, sizes.length - 1)];
+      // Hide the editor while typing so the on-screen keyboard leaves room for the map.
+      this.contentEl.addClass("is-prompting");
       const el = this.mapEl.createDiv("mind-atlas-inline");
       el.setAttr("data-placeholder", "type here");
       el.setAttr("contenteditable", "plaintext-only");
@@ -2094,10 +2111,25 @@ export class MindAtlasView extends ItemView {
         this.inline = null;
         this.closeInline = null;
         el.remove();
+        this.contentEl.removeClass("is-prompting");
+        window.visualViewport?.removeEventListener("resize", reveal);
         this.mapEl.focus({ preventScroll: true });
         resolve(v && v.trim() ? v.trim() : null);
       };
       this.closeInline = finish;
+      // Pan the map so the field stays above the keyboard.
+      const reveal = () => {
+        if (done) return;
+        const vv = window.visualViewport;
+        const r = el.getBoundingClientRect();
+        const bottom = (vv ? vv.offsetTop + vv.height : window.innerHeight) - 24;
+        const top = (vv ? vv.offsetTop : 0) + 24;
+        if (r.bottom > bottom) this.ty -= r.bottom - bottom;
+        else if (r.top < top) this.ty += top - r.top;
+        else return;
+        this.applyTransform();
+      };
+      window.visualViewport?.addEventListener("resize", reveal);
       el.addEventListener("keydown", (e) => {
         e.stopPropagation();
         if (e.key === "Enter") {
@@ -2117,6 +2149,8 @@ export class MindAtlasView extends ItemView {
       }
       window.setTimeout(() => {
         el.focus();
+        reveal();
+        window.setTimeout(reveal, 350);
         if (initial !== undefined) document.getSelection()?.selectAllChildren(el);
       }, 0);
     });
