@@ -117,4 +117,6 @@
 .mind-atlas-container.is-keyboard { background: var(--background-primary); }
 .mind-atlas-container.is-keyboard:not(.is-editor-right) > .mind-atlas-editor-pane { max-height: 55%; }
 .mind-atlas-debug { position: absolute; left: 4px; top: 100px; right: 4px; background: var(--background-primary); z-index: 99; font-size: 10px; color: var(--text-faint); pointer-events: none; display: none; }
-.is-mobile .mind-atlas-debug { display: block; }
+.is-mobile .mind-atlas-container.show-debug .mind-atlas-debug { display: block; }
+
+.mind-atlas-editor { min-height: 0; }

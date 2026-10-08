@@ -49,6 +49,7 @@ interface ViewState extends Record<string, unknown> {
   extras?: string[];
   collapsed?: string[];
   editorHidden?: boolean;
+  debug?: boolean;
 }
 
 const pairKey = (a: MapNode, b: MapNode) =>
@@ -74,6 +75,8 @@ export class MindAtlasView extends ItemView {
   private editorHeight = 280;
   private editorWidth = 400;
   private editorHidden = false;
+  private debug = true;
+  private debugBox?: HTMLInputElement;
   private editorBox: HTMLInputElement | null = null;
   private selectedPath: string | null = null;
   private graph: MapGraph | null = null;
@@ -155,6 +158,7 @@ export class MindAtlasView extends ItemView {
     if (typeof state?.depth === "number") this.depth = state.depth;
     if (typeof state?.backlinks === "boolean") this.backlinks = state.backlinks;
     if (typeof state?.editorHidden === "boolean") this.editorHidden = state.editorHidden;
+    if (typeof state?.debug === "boolean") this.debug = state.debug;
     if (Array.isArray(state?.extras)) {
       this.extras = state.extras.filter((x): x is string => typeof x === "string");
     }
@@ -174,6 +178,7 @@ export class MindAtlasView extends ItemView {
       backlinks: this.backlinks,
       extras: this.extras,
       editorHidden: this.editorHidden,
+      debug: this.debug,
       collapsed: [...this.collapsed],
     };
   }
@@ -200,21 +205,33 @@ export class MindAtlasView extends ItemView {
     };
     // While the keyboard is up, Obsidian shrinks the leaf but the flex children collapse to
     // zero height. Give the view and its children explicit pixel heights from the leaf.
+    const report = (kb: boolean, parentH: number) => {
+      const box = (e: Element | null) => {
+        if (!e) return "-";
+        const b = e.getBoundingClientRect();
+        return `${Math.round(b.width)}x${Math.round(b.height)}@${Math.round(b.top)}`;
+      };
+      const host = el.querySelector(".mind-atlas-editor");
+      const cm = el.querySelector(".cm-editor");
+      const sc = el.querySelector(".cm-scroller");
+      dbg.setText(`kb ${kb} leaf ${parentH} view ${box(el)} map ${box(this.mapEl)} pane ${box(pane())} host ${box(host)} cm ${box(cm)} scroller ${box(sc)} lines ${el.querySelectorAll(".cm-line").length} vv ${Math.round(vv?.height ?? 0)} win ${window.innerHeight}`);
+    };
     const sync = () => {
       if (!vv) return;
       const kb = editing();
       const parentH = el.parentElement?.clientHeight ?? 0;
-      const r = el.getBoundingClientRect();
-      const m = this.mapEl.getBoundingClientRect();
-      dbg.setText(`kb ${kb} leaf ${parentH} view ${Math.round(r.height)} map ${Math.round(m.width)}x${Math.round(m.height)} vv ${Math.round(vv.height)} win ${window.innerHeight}`);
-      if (!kb) return release();
-      if (parentH < 100) return;
+      if (!kb) {
+        release();
+        return report(kb, parentH);
+      }
+      if (parentH < 100) return report(kb, parentH);
       el.addClass("is-keyboard");
       el.style.height = `${parentH}px`;
       if (el.hasClass("is-editor-right")) {
         this.mapEl.style.height = `${parentH}px`;
         pane()?.style.setProperty("height", `${parentH}px`);
       }
+      report(kb, parentH);
     };
     vv?.addEventListener("resize", sync);
     vv?.addEventListener("scroll", sync);
@@ -359,6 +376,16 @@ export class MindAtlasView extends ItemView {
       this.syncToolbar();
       this.app.workspace.requestSaveLayout();
     };
+    if (Platform.isMobile) {
+      const dbLabel = bar.createEl("label", { attr: { title: "Show the layout debug readout" } });
+      this.debugBox = dbLabel.createEl("input", { type: "checkbox" });
+      dbLabel.appendText(" Debug");
+      this.debugBox.onchange = () => {
+        this.debug = this.debugBox!.checked;
+        this.syncToolbar();
+        this.app.workspace.requestSaveLayout();
+      };
+    }
     const boxLabel = bar.createEl("label");
     this.boxBox = boxLabel.createEl("input", { type: "checkbox" });
     boxLabel.appendText(" Boxes");
@@ -391,6 +418,8 @@ export class MindAtlasView extends ItemView {
     if (this.editorBox) this.editorBox.checked = !this.editorHidden;
     this.contentEl.toggleClass("is-editor-hidden", this.editorHidden);
     if (this.connBox) this.connBox.checked = this.plugin.settings.showConnections;
+    if (this.debugBox) this.debugBox.checked = this.debug;
+    this.contentEl.toggleClass("show-debug", this.debug);
   }
 
   private setDepth(d: number) {
