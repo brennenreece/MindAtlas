@@ -18,15 +18,15 @@ export function childMap(edges: Edge[]): Map<MapNode, MapNode[]> {
 
 /**
  * Deterministic layout of the tree edges. Sets each node's `bx`/`by`
- * (its automatic position, root at 0,0). Notes with no parent are left alone.
- * Boxes never overlap and tree lines never run through other boxes.
+ * (its automatic position, root at 0,0). Radial mode gives each subtree an
+ * angular sector and places depth rings far enough apart for their node boxes.
  */
-export function arrange(root: MapNode, edges: Edge[], mode: LayoutMode, spacing: number) {
+export function arrange(root: MapNode, edges: Edge[], mode: LayoutMode, spacing: number, crossLinks: Edge[] = []) {
   const kids = childMap(edges);
   root.bx = 0;
   root.by = 0;
   if (mode === "tree") arrangeTree(root, kids, spacing);
-  else arrangeRadial(root, kids, spacing);
+  else arrangeRadial(root, kids, spacing, crossLinks);
 }
 
 /** Final positions: automatic layout plus manual offsets (which carry whole branches). */
@@ -132,170 +132,125 @@ function arrangeTree(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: numb
     }
   }
 }
-const PAD = 6;
-const STEP = 5;
-const REACH = 900;
-const SWING = [0, 2, -2, 4, -4, 7, -7, 10, -10, 14, -14];
+const ROOT_ANGLE = -Math.PI / 2;
+
 function boxesTouch(a: Box, b: Box, pad: number) {
   return Math.abs(a.x - b.x) < (a.w + b.w) / 2 + pad && Math.abs(a.y - b.y) < (a.h + b.h) / 2 + pad;
 }
-function segmentHitsBox(p: Pt, q: Pt, b: Box, pad: number) {
-  const hx = b.w / 2 + pad;
-  const hy = b.h / 2 + pad;
-  let t0 = 0;
-  let t1 = 1;
-  const d: number[] = [q.x - p.x, q.y - p.y];
-  const lo: number[] = [b.x - hx - p.x, b.y - hy - p.y];
-  const hi: number[] = [b.x + hx - p.x, b.y + hy - p.y];
-  for (let i = 0; i < 2; i++) {
-    if (Math.abs(d[i]) < 1e-9) {
-      if (lo[i] > 0 || hi[i] < 0) return false;
-    } else {
-      let a = lo[i] / d[i];
-      let c = hi[i] / d[i];
-      if (a > c) [a, c] = [c, a];
-      t0 = Math.max(t0, a);
-      t1 = Math.min(t1, c);
-      if (t0 > t1) return false;
-    }
-  }
-  return true;
-}
-const orient = (a: Pt, b: Pt, c: Pt) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-function segmentsCross(a: Pt, b: Pt, c: Pt, d: Pt) {
-  return orient(a, b, c) * orient(a, b, d) < 0 && orient(c, d, a) * orient(c, d, b) < 0;
-}
-function arrangeRadial(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: number) {
+
+function arrangeRadial(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: number, crossLinks: Edge[]) {
+  const angle = new Map<MapNode, number>();
   const weight = new Map<MapNode, number>();
-  const demand = (n: MapNode, th?: number) => th === void 0 ? 40 : Math.abs(Math.sin(th)) * n.w + Math.abs(Math.cos(th)) * n.h + 12;
-  const weigh = (n: MapNode, angles: Map<MapNode, number>): number => {
-    const ks = kids.get(n) ?? [];
-    const own = demand(n, angles.get(n));
-    const w = ks.length ? Math.max(own, ks.reduce((t, k) => t + weigh(k, angles), 0)) : own;
-    weight.set(n, w);
-    return w;
-  };
-  let angle = new Map<MapNode, number>();
-  const assign = (n: MapNode, a0: number, a1: number): void => {
-    angle.set(n, (a0 + a1) / 2);
-    const ks = kids.get(n) ?? [];
-    const total = ks.reduce((t, k) => t + weight.get(k)!, 0) || 1;
-    let a = a0;
-    for (const k of ks) {
-      const span = (a1 - a0) * weight.get(k)! / total;
-      assign(k, a, a + span);
-      a += span;
-    }
-  };
-  const rootKids = kids.get(root) ?? [];
-  const outs = rootKids.filter((k) => k.side !== -1);
-  const backs = rootKids.filter((k) => k.side === -1);
-  const wOf = (g: MapNode[]) => g.reduce((t, k) => t + weight.get(k)!, 0);
-  const top = -Math.PI / 2;
-  const spread = (g: MapNode[], a0: number, a1: number) => {
-    const total = wOf(g) || 1;
-    let a = a0;
-    for (const k of g) {
-      const span = (a1 - a0) * weight.get(k)! / total;
-      assign(k, a, a + span);
-      a += span;
-    }
-  };
-  for (let pass = 0; pass < 4; pass++) {
-    for (const k of rootKids) weigh(k, angle);
-    angle = new Map();
-    if (outs.length && backs.length) {
-      const share = Math.min(0.7, Math.max(0.3, wOf(outs) / (wOf(outs) + wOf(backs))));
-      const so = Math.PI * 2 * share;
-      const sb = Math.PI * 2 - so;
-      spread(outs, -so / 2, so / 2);
-      spread(backs, Math.PI + sb / 2, Math.PI - sb / 2);
-    } else {
-      spread(rootKids, top, top + Math.PI * 2);
-    }
+  const links = new Map<MapNode, number>();
+  for (const edge of crossLinks) {
+    links.set(edge.from, (links.get(edge.from) ?? 0) + 1);
+    links.set(edge.to, (links.get(edge.to) ?? 0) + 1);
   }
-  const boxes: Box[] = [{ x: 0, y: 0, w: root.w, h: root.h }];
-  const segs: Seg[] = [];
-  const at = new Map<MapNode, Pt>([[root, { x: 0, y: 0 }]]);
-  const boxOf = new Map<MapNode, Box>([[root, boxes[0]]]);
-  const parentOf = new Map<MapNode, MapNode>();
-  for (const [p, ks] of kids) for (const k of ks) parentOf.set(k, p);
-  let level = rootKids;
-  while (level.length) {
-    const next: MapNode[] = [];
-    for (const n of level) {
-      const parent = parentOf.get(n)!;
-      const pp = at.get(parent)!;
-      const pb = boxOf.get(parent)!;
-      const th0 = angle.get(n)!;
-      const cand = { x: 0, y: 0, w: n.w, h: n.h };
-      const r0 = Math.hypot(pp.x, pp.y);
-      let best: { x: number; y: number; cost: number } | null = null;
-      for (const level2 of [2, 1, 0]) {
-        for (const k of SWING) {
-          const th = th0 + k * Math.PI / 180;
-          const ux = Math.cos(th);
-          const uy = Math.sin(th);
-          const limit = best ? best.cost : Infinity;
-          for (let rho = r0; rho < r0 + REACH && rho + Math.abs(k) * 6 < limit; rho += STEP) {
-            cand.x = ux * rho;
-            cand.y = uy * rho;
-            const gapX = Math.abs(cand.x - pb.x) - (cand.w + pb.w) / 2;
-            const gapY = Math.abs(cand.y - pb.y) - (cand.h + pb.h) / 2;
-            if (Math.max(gapX, gapY) < spacing) continue;
-            if (blocked(cand, pp, parent, boxes, boxOf, segs, level2)) continue;
-            best = { x: cand.x, y: cand.y, cost: rho + Math.abs(k) * 6 };
-            break;
-          }
-        }
-        if (best) break;
-      }
-      if (!best) best = { x: cand.x, y: cand.y, cost: 0 };
-      cand.x = best.x;
-      cand.y = best.y;
-      n.bx = cand.x;
-      n.by = cand.y;
-      const pt = { x: cand.x, y: cand.y };
-      at.set(n, pt);
-      const placed = { ...cand };
-      boxes.push(placed);
-      boxOf.set(n, placed);
-      segs.push({ a: pp, b: pt, from: parent, to: n });
-      next.push(...kids.get(n) ?? []);
+
+  const measure = (n: MapNode): number => {
+    const children = kids.get(n) ?? [];
+    const own = Math.max(40, n.w, n.h);
+    const childDemand = children.reduce((sum, child) => sum + measure(child), 0) + Math.max(0, children.length - 1) * spacing * 0.25;
+    const linkDemand = (links.get(n) ?? 0) * Math.min(12, spacing * 0.25);
+    const total = Math.max(own, childDemand) + linkDemand;
+    weight.set(n, total);
+    return total;
+  };
+
+  const assign = (n: MapNode, start: number, end: number) => {
+    angle.set(n, (start + end) / 2);
+    const children = kids.get(n) ?? [];
+    const total = children.reduce((sum, child) => sum + weight.get(child)!, 0) || 1;
+    let cursor = start;
+    for (const child of children) {
+      const span = (end - start) * weight.get(child)! / total;
+      assign(child, cursor, cursor + span);
+      cursor += span;
     }
-    level = next;
+  };
+
+  const rootKids = kids.get(root) ?? [];
+  for (const child of rootKids) measure(child);
+  const outgoing = rootKids.filter((n) => n.side !== -1);
+  const incoming = rootKids.filter((n) => n.side === -1);
+  const spread = (nodes: MapNode[], start: number, end: number) => {
+    const total = nodes.reduce((sum, n) => sum + weight.get(n)!, 0) || 1;
+    let cursor = start;
+    for (const n of nodes) {
+      const span = (end - start) * weight.get(n)! / total;
+      assign(n, cursor, cursor + span);
+      cursor += span;
+    }
+  };
+
+  if (outgoing.length && incoming.length) {
+    spread(outgoing, -Math.PI / 2, Math.PI / 2);
+    spread(incoming, Math.PI / 2, Math.PI * 1.5);
+  } else {
+    spread(rootKids, ROOT_ANGLE, ROOT_ANGLE + Math.PI * 2);
+  }
+
+  let level = rootKids;
+  let radius = 0;
+  let previousOuter = Math.hypot(root.w / 2, root.h / 2);
+  const pad = Math.max(4, Math.min(16, spacing * 0.2));
+  const step = Math.max(4, spacing * 0.1);
+  const placedBoxes: Box[] = [{ x: 0, y: 0, w: root.w, h: root.h }];
+
+  while (level.length) {
+    const outer = Math.max(...level.map((n) => Math.hypot(n.w / 2, n.h / 2)));
+    radius = Math.max(
+      radius + previousOuter + outer + spacing,
+      minimumRingRadius(level, angle, pad)
+    );
+
+    const positions = () => level.map((n) => {
+      const a = angle.get(n)!;
+      return { node: n, box: { x: Math.cos(a) * radius, y: Math.sin(a) * radius, w: n.w, h: n.h } };
+    });
+    let placed = positions();
+    while (hasOverlaps([...placedBoxes, ...placed.map((p) => p.box)], pad)) {
+      radius += step;
+      placed = positions();
+    }
+
+    for (const { node, box } of placed) {
+      node.bx = box.x;
+      node.by = box.y;
+      placedBoxes.push(box);
+    }
+    previousOuter = outer;
+    level = level.flatMap((n) => kids.get(n) ?? []);
   }
 }
-function blocked(cand: Box, from: Pt, parent: MapNode, boxes: Box[], boxOf: Map<MapNode, Box>, segs: Seg[], level: number) {
-  const to = { x: cand.x, y: cand.y };
-  const pbox = boxOf.get(parent)!;
-  const lx0 = Math.min(from.x, to.x) - 4;
-  const lx1 = Math.max(from.x, to.x) + 4;
-  const ly0 = Math.min(from.y, to.y) - 4;
-  const ly1 = Math.max(from.y, to.y) + 4;
-  for (const b of boxes) {
-    if (boxesTouch(cand, b, PAD)) return true;
-    if (level === 0 || b === pbox) continue;
-    if (b.x + b.w / 2 < lx0 || b.x - b.w / 2 > lx1 || b.y + b.h / 2 < ly0 || b.y - b.h / 2 > ly1) continue;
-    if (segmentHitsBox(from, to, b, 2)) return true;
-  }
-  if (level === 0) return false;
-  const cx0 = cand.x - cand.w / 2 - 4;
-  const cx1 = cand.x + cand.w / 2 + 4;
-  const cy0 = cand.y - cand.h / 2 - 4;
-  const cy1 = cand.y + cand.h / 2 + 4;
-  for (const s of segs) {
-    const sx0 = Math.min(s.a.x, s.b.x);
-    const sx1 = Math.max(s.a.x, s.b.x);
-    const sy0 = Math.min(s.a.y, s.b.y);
-    const sy1 = Math.max(s.a.y, s.b.y);
-    const incident = s.from === parent || s.to === parent;
-    if (!(s.to === parent) && !(sx1 < cx0 || sx0 > cx1 || sy1 < cy0 || sy0 > cy1)) {
-      if (segmentHitsBox(s.a, s.b, cand, 2)) return true;
-    }
-    if (level === 2 && !incident && !(sx1 < lx0 || sx0 > lx1 || sy1 < ly0 || sy0 > ly1)) {
-      if (segmentsCross(from, to, s.a, s.b)) return true;
+
+function hasOverlaps(boxes: Box[], pad: number) {
+  const ordered = [...boxes].sort((a, b) => a.x - b.x || a.y - b.y);
+  for (let i = 0; i < ordered.length; i++) {
+    for (let j = i + 1; j < ordered.length; j++) {
+      if (ordered[j].x - ordered[i].x >= (ordered[i].w + ordered[j].w) / 2 + pad) break;
+      if (boxesTouch(ordered[i], ordered[j], pad)) return true;
     }
   }
   return false;
+}
+
+function minimumRingRadius(nodes: MapNode[], angles: Map<MapNode, number>, pad: number) {
+  if (nodes.length < 2) return 0;
+  const ordered = [...nodes].sort((a, b) => angles.get(a)! - angles.get(b)!);
+  let radius = 0;
+  for (let i = 0; i < ordered.length; i++) {
+    const a = ordered[i];
+    const b = ordered[(i + 1) % ordered.length];
+    const delta = i === ordered.length - 1
+      ? angles.get(b)! + Math.PI * 2 - angles.get(a)!
+      : angles.get(b)! - angles.get(a)!;
+    const chord = 2 * Math.sin(delta / 2);
+    if (chord > 1e-6) {
+      const halfA = Math.hypot(a.w / 2, a.h / 2);
+      const halfB = Math.hypot(b.w / 2, b.h / 2);
+      radius = Math.max(radius, (halfA + halfB + pad) / chord);
+    }
+  }
+  return radius;
 }

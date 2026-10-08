@@ -9,6 +9,12 @@ import { askChoice } from "./modals";
 import { applyOffsets, arrange, childMap, Pt } from "./arrange";
 import { UndoStack } from "./undo";
 import { buildGraph, Edge, MapGraph, MapNode } from "./tree";
+import {
+  cubicControls as computeCubicControls,
+  radialBoundaryAnchor,
+  routeCrossLinks as findCrossLinkRoutes,
+  sampleCubic,
+} from "./radial-routing";
 
 export const VIEW_TYPE_MINDATLAS = "mind-atlas-view";
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -492,7 +498,7 @@ export class MindAtlasView extends ItemView {
     for (const [n, el] of this.nodeEls) {
       el.toggleClass("is-selected", n.file.path === file.path);
     }
-    this.refreshCrossLinks();
+    this.refreshCrossLinks(true);
     this.editorTitle.value = file.basename;
     void this.editor?.open(file);
   }
@@ -737,7 +743,7 @@ export class MindAtlasView extends ItemView {
     const g = this.graph;
     if (!g) return;
     const s = this.plugin.settings;
-    arrange(g.root, g.treeEdges, s.layoutMode, s.spacing);
+    arrange(g.root, g.treeEdges, s.layoutMode, s.spacing, g.crossLinks);
     applyOffsets(g.root, g.treeEdges, this.offsets, this.free, g.nodes);
     if (snap || g.nodes.length > 600) {
       for (const n of g.nodes) {
@@ -770,8 +776,9 @@ export class MindAtlasView extends ItemView {
           moving = true;
         }
       }
-      this.updatePositions();
+      this.updatePositions(false);
       if (moving || this.dragging) this.animFrame = requestAnimationFrame(step);
+      else this.updatePositions();
     };
     this.animFrame = requestAnimationFrame(step);
   }
@@ -958,42 +965,18 @@ export class MindAtlasView extends ItemView {
 
   /** Where a line from `n` toward `other` leaves the node's box, and which way it heads. */
   private boundaryAnchor(n: MapNode, other: Pt): Anchor {
-    const dx = other.x - n.x;
-    const dy = other.y - n.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const hw = n.w / 2;
-    const hh = n.h / 2;
-    const tx = Math.abs(dx) > 1e-6 ? hw / Math.abs(dx) : Infinity;
-    const ty = Math.abs(dy) > 1e-6 ? hh / Math.abs(dy) : Infinity;
-    const t = Math.min(tx, ty);
-    const normal = tx <= ty ? { x: Math.sign(dx), y: 0 } : { x: 0, y: Math.sign(dy) };
-    const ux = dx / len;
-    const uy = dy / len;
-    const hx = normal.x * 0.55 + ux * 0.45;
-    const hy = normal.y * 0.55 + uy * 0.45;
-    const hl = Math.hypot(hx, hy) || 1;
-    return { p: { x: n.x + dx * t, y: n.y + dy * t }, dir: { x: hx / hl, y: hy / hl } };
+    return radialBoundaryAnchor(n, other);
+  }
+
+  private lineControlPoints(a: Anchor, b: Anchor, style: string): [Pt, Pt, Pt, Pt] | null {
+    return computeCubicControls(a, b, style);
   }
 
   private linePath(a: Anchor, b: Anchor, style: string, widthK: number, sizeK: [number, number] = [1, 1]): string {
-    const p1 = a.p;
-    const p2 = b.p;
-    if (style === "straight") return `M${p1.x},${p1.y} L${p2.x},${p2.y}`;
-    const d1 = a.dir;
-    const d2 = b.dir;
-    // Handle length follows the distance along each side's own axis, so lines
-    // leave a note cleanly and sweep into the next one in a smooth S.
-    const reach = (d: Pt) => Math.abs(d.x) * Math.abs(p2.x - p1.x) + Math.abs(d.y) * Math.abs(p2.y - p1.y);
+    const controls = this.lineControlPoints(a, b, style);
+    if (!controls) return `M${a.p.x},${a.p.y} L${b.p.x},${b.p.y}`;
+    const [p1, c1, c2, p2] = controls;
     const organic = style === "organic";
-    const base = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    const k1 = organic ? 0.62 : 0.5;
-    const k2 = organic ? 0.42 : 0.5;
-    const off1 = Math.min(320, Math.max(28, reach(d1) * k1 + base * 0.12));
-    const off2 = Math.min(320, Math.max(28, reach(d2) * k2 + base * 0.12));
-    // Organic lines also drift slightly sideways so they feel hand-drawn.
-    const bend = organic ? Math.max(-26, Math.min(26, (p2.y - p1.y) * 0.1 + (p2.x - p1.x) * 0.04)) : 0;
-    const c1 = { x: p1.x + d1.x * off1 - d1.y * bend, y: p1.y + d1.y * off1 + d1.x * bend };
-    const c2 = { x: p2.x + d2.x * off2 + d2.y * bend, y: p2.y + d2.y * off2 - d2.x * bend };
     if (!organic) {
       return `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
     }
@@ -1023,7 +1006,7 @@ export class MindAtlasView extends ItemView {
   }
 
   /** Move existing DOM elements to the layout's current positions. */
-  private updatePositions() {
+  private updatePositions(routeCrossLinks = true) {
     for (const [n, el] of this.nodeEls) {
       el.setAttribute("transform", `translate(${n.x} ${n.y})`);
       this.positions.set(n.file.path, { x: n.x, y: n.y });
@@ -1033,6 +1016,36 @@ export class MindAtlasView extends ItemView {
     this.positionMenu();
     this.positionInline();
     this.updatePreview();
+    const occupied = this.edgeEls.flatMap(({ edge, cross }, i) => {
+      if (cross) return [];
+      const style = s.lineStyle;
+      const fromThick = !(edge.back && !edge.fwd);
+      const [a, b] = anchors[i];
+      const controls = fromThick ? this.lineControlPoints(a, b, style) : this.lineControlPoints(b, a, style);
+      return [{
+        source: edge.from.file.path,
+        target: edge.to.file.path,
+        points: controls ? sampleCubic(...controls) : [a.p, b.p],
+      }];
+    });
+    const links = routeCrossLinks && s.layoutMode === "radial"
+      ? this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
+          if (!cross || el.hasClass("is-hidden")) return [];
+          const [a, b] = anchors[i];
+          return [{
+            key,
+            source: edge.from.file.path,
+            target: edge.to.file.path,
+            start: a.p,
+            end: b.p,
+          }];
+        })
+      : [];
+    const routed = findCrossLinkRoutes(
+      links,
+      this.graph?.nodes.map((n) => ({ id: n.file.path, x: n.x, y: n.y, w: n.w, h: n.h })) ?? [],
+      occupied
+    );
     this.edgeEls.forEach(({ edge, el, cross, heads }, i) => {
       // Cross-links are never ribbons; they stay dashed strokes.
       const style = cross && s.lineStyle === "organic" ? "curved" : s.lineStyle;
@@ -1042,8 +1055,9 @@ export class MindAtlasView extends ItemView {
         const dx = b.p.x - a.p.x;
         const dy = b.p.y - a.p.y;
         const len = Math.hypot(dx, dy) || 1;
+        const route = routed.get(this.edgeEls[i].key);
         const bow = Math.min(70, len * 0.22);
-        const c = { x: (a.p.x + b.p.x) / 2 - (dy / len) * bow, y: (a.p.y + b.p.y) / 2 + (dx / len) * bow };
+        const c = route?.control ?? { x: (a.p.x + b.p.x) / 2 - (dy / len) * bow, y: (a.p.y + b.p.y) / 2 + (dx / len) * bow };
         const d = `M${a.p.x},${a.p.y} Q${c.x},${c.y} ${b.p.x},${b.p.y}`;
         el.setAttribute("d", d);
         this.edgeEls[i].hit.setAttribute("d", d);
@@ -2001,7 +2015,7 @@ export class MindAtlasView extends ItemView {
     this.relayout(false);
   }
 
-  private refreshCrossLinks() {
+  private refreshCrossLinks(reroute = false) {
     const mode = this.plugin.settings.crossLinks;
     for (const e of this.edgeEls) {
       if (!e.cross) continue;
@@ -2010,6 +2024,7 @@ export class MindAtlasView extends ItemView {
         (mode === "hover" && (e.edge.from.file.path === this.selectedPath || e.edge.to.file.path === this.selectedPath));
       for (const el of [e.el, e.hit, ...e.heads]) el.toggleClass("is-hidden", !on);
     }
+    if (reroute) this.updatePositions();
   }
 
   // ---------- link preview and the link tool ----------
