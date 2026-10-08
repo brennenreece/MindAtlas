@@ -1,4 +1,4 @@
-import { ItemView, Menu, Notice, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, Platform, TFile, WorkspaceLeaf } from "obsidian";
 import type MindAtlasPlugin from "./main";
 import { fi, iconCategories, iconSvg, resolveIcon, setFeather as setIcon } from "./icons";
 import { NoteEditor } from "./editor";
@@ -2115,23 +2115,39 @@ export class MindAtlasView extends ItemView {
         el.remove();
         this.contentEl.removeClass("is-prompting");
         window.visualViewport?.removeEventListener("resize", reveal);
+        window.visualViewport?.removeEventListener("scroll", reveal);
+        restore();
         this.mapEl.focus({ preventScroll: true });
         resolve(v && v.trim() ? v.trim() : null);
       };
       this.closeInline = finish;
-      // Pan the map so the field stays above the keyboard.
+      // On touch devices, center the node in the part of the map the keyboard leaves visible,
+      // and put the view back afterwards.
+      const saved = { tx: this.tx, ty: this.ty };
       const reveal = () => {
-        if (done) return;
+        if (done || !Platform.isMobile) return;
+        // iOS scrolls the page to show a focused field; undo that so the map stays put.
+        window.scrollTo(0, 0);
+        for (const e of [document.scrollingElement, this.contentEl, this.mapEl]) if (e) e.scrollTop = 0;
         const vv = window.visualViewport;
-        const r = el.getBoundingClientRect();
-        const bottom = (vv ? vv.offsetTop + vv.height : window.innerHeight) - 24;
-        const top = (vv ? vv.offsetTop : 0) + 24;
-        if (r.bottom > bottom) this.ty -= r.bottom - bottom;
-        else if (r.top < top) this.ty += top - r.top;
-        else return;
+        const r = this.mapEl.getBoundingClientRect();
+        const top = Math.max(r.top, vv?.offsetTop ?? 0);
+        const bottom = Math.min(r.bottom, vv ? vv.offsetTop + vv.height : window.innerHeight);
+        const left = Math.max(r.left, vv?.offsetLeft ?? 0);
+        const right = Math.min(r.right, vv ? vv.offsetLeft + vv.width : window.innerWidth);
+        if (bottom - top < 40 || right - left < 40) return;
+        this.tx = (left + right) / 2 - r.left - pos.x * this.scale;
+        this.ty = (top + bottom) / 2 - r.top - pos.y * this.scale;
+        this.applyTransform();
+      };
+      const restore = () => {
+        if (!Platform.isMobile) return;
+        this.tx = saved.tx;
+        this.ty = saved.ty;
         this.applyTransform();
       };
       window.visualViewport?.addEventListener("resize", reveal);
+      window.visualViewport?.addEventListener("scroll", reveal);
       el.addEventListener("keydown", (e) => {
         e.stopPropagation();
         if (e.key === "Enter") {
@@ -2150,9 +2166,10 @@ export class MindAtlasView extends ItemView {
         el.textContent = initial;
       }
       window.setTimeout(() => {
-        el.focus();
+        el.focus({ preventScroll: true });
         reveal();
         window.setTimeout(reveal, 350);
+        window.setTimeout(reveal, 800);
         if (initial !== undefined) document.getSelection()?.selectAllChildren(el);
       }, 0);
     });
@@ -2163,7 +2180,7 @@ export class MindAtlasView extends ItemView {
     if (!i) return;
     i.el.style.left = `${this.tx + i.pos.x * this.scale}px`;
     i.el.style.top = `${this.ty + i.pos.y * this.scale}px`;
-    i.el.style.fontSize = `${i.px * this.scale}px`;
+    i.el.style.fontSize = `${Math.max(i.px * this.scale, Platform.isMobile ? 16 : 0)}px`;
     i.el.style.transform = `translate(${i.anchor === "left" ? "0" : i.anchor === "right" ? "-100%" : "-50%"}, -50%)`;
     this.drawInlineLine();
   }
