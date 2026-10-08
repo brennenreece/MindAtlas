@@ -1370,14 +1370,16 @@ export class MindAtlasView extends ItemView {
       if (n) void this.setMeta(n, "mindmap-color", c);
     };
     for (const [c, name] of KELLY) {
-      const b = sw.createEl("button", { cls: "mind-atlas-swatch", attr: { "aria-label": name, title: name } });
-      b.style.background = c;
+      // A div, not a button: iOS applies its own sizing to buttons, which stretched these into ovals.
+      const b = sw.createDiv({ cls: "mind-atlas-swatch", attr: { role: "button", "aria-label": name, title: name } });
+      b.style.cssText = `width:22px;height:22px;border-radius:50%;box-sizing:border-box;background:${c};`;
       b.addEventListener("click", (e) => {
         e.stopPropagation();
         pick(c);
       });
     }
-    const auto = sw.createEl("button", { cls: "mind-atlas-swatch is-auto", attr: { "aria-label": "Automatic color" } });
+    const auto = sw.createDiv({ cls: "mind-atlas-swatch is-auto", attr: { role: "button", "aria-label": "Automatic color" } });
+    auto.style.cssText = "width:22px;height:22px;border-radius:50%;box-sizing:border-box;";
     setIcon(auto, "eraser");
     auto.addEventListener("click", (e) => {
       e.stopPropagation();

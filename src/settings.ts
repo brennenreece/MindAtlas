@@ -123,6 +123,7 @@ export class MindAtlasSettingTab extends PluginSettingTab {
     containerEl.empty();
     const s = this.plugin.settings;
     const save = () => this.plugin.saveSettings();
+    containerEl.createEl("p", { cls: "setting-item-description", text: `MindAtlas ${this.plugin.manifest.version} — built ${__BUILD__}` });
 
     const slider = (
       parent: HTMLElement,
