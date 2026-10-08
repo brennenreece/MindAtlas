@@ -14,7 +14,7 @@ const load = async (name) => {
   return import(`data:text/javascript;base64,${Buffer.from(output.contents).toString("base64")}`);
 };
 
-const { arrange } = await load("arrange");
+const { arrange, RADIAL_PRESETS } = await load("arrange");
 const { cubicControls, radialBoundaryAnchor, routeCrossLinks, sampleCubic } = await load("radial-routing");
 
 function node(path, w = 90, h = 30, side = 1) {
@@ -248,4 +248,33 @@ test("cross-links do not reuse a crossing route when another bend is available",
   }
 
   assert.equal(crossings, 0);
+});
+
+function branchy() {
+  const root = node("root", 160, 72, 0);
+  const nodes = [root];
+  const edges = [];
+  for (let i = 0; i < 6; i++) {
+    const b = node(`b${i}`, 90, 36);
+    nodes.push(b);
+    edges.push(edge(root, b));
+    for (let j = 0; j < 4; j++) {
+      const c = node(`b${i}-${j}`, 100, 34);
+      nodes.push(c);
+      edges.push(edge(b, c));
+    }
+  }
+  return { root, nodes, edges };
+}
+
+test("radial presets stay separated and get looser from compact to spacious", () => {
+  const spread = {};
+  for (const name of ["compact", "balanced", "spacious"]) {
+    const { root, nodes, edges } = branchy();
+    arrange(root, edges, "radial", 50, [], RADIAL_PRESETS[name]);
+    assertNoOverlaps(nodes);
+    assert.equal(countTreeCrossings(edges), 0, `${name} crossings`);
+    spread[name] = Math.max(...nodes.map((n) => Math.hypot(n.bx, n.by)));
+  }
+  assert.ok(spread.compact < spread.balanced && spread.balanced < spread.spacious, JSON.stringify(spread));
 });

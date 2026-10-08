@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type MindAtlasPlugin from "./main";
+import { RADIAL_PRESETS, RadialTuning } from "./arrange";
 
 export interface MindAtlasSettings {
   // Font sizes in px for H1 (root) .. H6; deeper generations reuse H6.
@@ -29,6 +30,7 @@ export interface MindAtlasSettings {
   defaultDepth: number;
   // Gap in px between linked nodes.
   spacing: number;
+  radialTuning: RadialTuning;
   hasSeenGuide: boolean;
 }
 
@@ -54,11 +56,16 @@ export const DEFAULT_SETTINGS: MindAtlasSettings = {
   editorPosition: "bottom",
   defaultDepth: 3,
   spacing: 50,
+  radialTuning: { ...RADIAL_PRESETS.balanced },
   hasSeenGuide: false,
 };
 
 export function defaultSettings(): MindAtlasSettings {
-  return { ...DEFAULT_SETTINGS, headingSizes: [...DEFAULT_SETTINGS.headingSizes] };
+  return {
+    ...DEFAULT_SETTINGS,
+    headingSizes: [...DEFAULT_SETTINGS.headingSizes],
+    radialTuning: { ...DEFAULT_SETTINGS.radialTuning },
+  };
 }
 
 /** Merge saved data over defaults, clamping every value to its valid range. */
@@ -100,6 +107,14 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
     maxNodes: num(s.maxNodes, d.maxNodes, 50, 2000),
     defaultDepth: Math.round(num(s.defaultDepth, d.defaultDepth, 1, 6)),
     spacing: num(s.spacing, d.spacing, 10, 200),
+    radialTuning: {
+      linkDistance: num(s.radialTuning?.linkDistance, d.radialTuning.linkDistance, 0, 150),
+      repel: num(s.radialTuning?.repel, d.radialTuning.repel, 0, 100),
+      gravity: num(s.radialTuning?.gravity, d.radialTuning.gravity, 0, 100),
+      linkStrength: num(s.radialTuning?.linkStrength, d.radialTuning.linkStrength, 0, 100),
+      crossPull: num(s.radialTuning?.crossPull, d.radialTuning.crossPull, 0, 100),
+      looseness: num(s.radialTuning?.looseness, d.radialTuning.looseness, 0, 100),
+    },
     hasSeenGuide: bool(s.hasSeenGuide, d.hasSeenGuide),
   };
 }
@@ -173,6 +188,40 @@ export class MindAtlasSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Layout").setHeading();
     slider(containerEl, "Node spacing", 10, 200, 5, () => s.spacing, (v) => (s.spacing = v)).setDesc(
       "Gap between linked nodes. Nodes arrange themselves; you can also drag them."
+    );
+
+    new Setting(containerEl)
+      .setName("Radial spacing preset")
+      .setDesc("Quick starting points for the radial force sliders below.")
+      .addDropdown((d) =>
+        d
+          .addOptions({ custom: "Custom", compact: "Compact", balanced: "Balanced", spacious: "Spacious" })
+          .setValue(
+            (["compact", "balanced", "spacious"] as const).find((k) =>
+              (Object.keys(RADIAL_PRESETS[k]) as (keyof RadialTuning)[]).every((f) => RADIAL_PRESETS[k][f] === s.radialTuning[f])
+            ) ?? "custom"
+          )
+          .onChange(async (v) => {
+            if (v === "custom") return;
+            s.radialTuning = { ...RADIAL_PRESETS[v as "compact"] };
+            await save();
+            this.display();
+          })
+      );
+    const tune = (name: string, key: keyof RadialTuning, max: number, desc: string) =>
+      slider(containerEl, name, 0, max, 1, () => s.radialTuning[key], (v) => (s.radialTuning[key] = v)).setDesc(desc);
+    tune("Link distance", "linkDistance", 150, "Target gap between a note and its children (radial layout).");
+    tune("Repel", "repel", 100, "How strongly notes push each other apart.");
+    tune("Gravity", "gravity", 100, "Pull toward the center note; higher is more compact.");
+    tune("Link strength", "linkStrength", 100, "How firmly linked notes pull together.");
+    tune("Cross-link pull", "crossPull", 100, "Attraction from dashed cross-links (0 ignores them).");
+    tune("Branch looseness", "looseness", 100, "How far notes may drift out of their branch's wedge; 0 keeps strict order.");
+    new Setting(containerEl).addButton((b) =>
+      b.setButtonText("Reset radial tuning").onClick(async () => {
+        s.radialTuning = { ...DEFAULT_SETTINGS.radialTuning };
+        await save();
+        this.display();
+      })
     );
 
     new Setting(containerEl)

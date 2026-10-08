@@ -743,7 +743,7 @@ export class MindAtlasView extends ItemView {
     const g = this.graph;
     if (!g) return;
     const s = this.plugin.settings;
-    arrange(g.root, g.treeEdges, s.layoutMode, s.spacing, g.crossLinks);
+    arrange(g.root, g.treeEdges, s.layoutMode, s.spacing, g.crossLinks, s.radialTuning);
     applyOffsets(g.root, g.treeEdges, this.offsets, this.free, g.nodes);
     if (snap || g.nodes.length > 600) {
       for (const n of g.nodes) {

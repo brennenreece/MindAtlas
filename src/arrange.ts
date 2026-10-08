@@ -2,6 +2,22 @@ import type { Edge, MapNode } from "./tree";
 
 export type LayoutMode = "radial" | "tree";
 
+/** 0-100 sliders (linkDistance in px) that shape the radial force pass. */
+export interface RadialTuning {
+  linkDistance: number;
+  repel: number;
+  gravity: number;
+  linkStrength: number;
+  crossPull: number;
+  looseness: number;
+}
+
+export const RADIAL_PRESETS: Record<"compact" | "balanced" | "spacious", RadialTuning> = {
+  compact: { linkDistance: 10, repel: 10, gravity: 80, linkStrength: 80, crossPull: 40, looseness: 40 },
+  balanced: { linkDistance: 20, repel: 25, gravity: 60, linkStrength: 65, crossPull: 30, looseness: 30 },
+  spacious: { linkDistance: 40, repel: 40, gravity: 40, linkStrength: 50, crossPull: 20, looseness: 20 },
+};
+
 export interface Pt {
   x: number;
   y: number;
@@ -21,12 +37,15 @@ export function childMap(edges: Edge[]): Map<MapNode, MapNode[]> {
  * (its automatic position, root at 0,0). Radial mode gives each subtree an
  * angular sector and places depth rings far enough apart for their node boxes.
  */
-export function arrange(root: MapNode, edges: Edge[], mode: LayoutMode, spacing: number, crossLinks: Edge[] = []) {
+export function arrange(root: MapNode, edges: Edge[], mode: LayoutMode, spacing: number,
+  crossLinks: Edge[] = [],
+  tuning: RadialTuning = RADIAL_PRESETS.balanced
+) {
   const kids = childMap(edges);
   root.bx = 0;
   root.by = 0;
   if (mode === "tree") arrangeTree(root, kids, spacing);
-  else arrangeRadial(root, kids, spacing, crossLinks);
+  else arrangeRadial(root, kids, Math.min(spacing, tuning.linkDistance), crossLinks, tuning);
 }
 
 /** Final positions: automatic layout plus manual offsets (which carry whole branches). */
@@ -139,7 +158,13 @@ function boxesTouch(a: Box, b: Box, pad: number) {
   return Math.abs(a.x - b.x) < (a.w + b.w) / 2 + pad && Math.abs(a.y - b.y) < (a.h + b.h) / 2 + pad;
 }
 
-function arrangeRadial(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: number, crossLinks: Edge[]) {
+function arrangeRadial(
+  root: MapNode,
+  kids: Map<MapNode, MapNode[]>,
+  spacing: number,
+  crossLinks: Edge[],
+  tuning: RadialTuning
+) {
   const angle = new Map<MapNode, number>();
   const sector = new Map<MapNode, [number, number]>();
   const weight = new Map<MapNode, number>();
@@ -226,7 +251,7 @@ function arrangeRadial(root: MapNode, kids: Map<MapNode, MapNode[]>, spacing: nu
     previousOuter = outer;
     level = level.flatMap((n) => kids.get(n) ?? []);
   }
-  settleRadial(root, kids, sector, angle, spacing, crossLinks);
+  settleRadial(root, kids, sector, angle, spacing, crossLinks, tuning);
 }
 
 function hasOverlaps(boxes: Box[], pad: number) {
@@ -266,7 +291,8 @@ function settleRadial(
   sectors: Map<MapNode, [number, number]>,
   angles: Map<MapNode, number>,
   spacing: number,
-  crossLinks: Edge[]
+  crossLinks: Edge[],
+  tuning: RadialTuning
 ) {
   const nodes: MapNode[] = [];
   const parent = new Map<MapNode, MapNode>();
@@ -285,8 +311,10 @@ function settleRadial(
   const position = new Map<MapNode, Pt>(nodes.map((n) => [n, { x: n.bx, y: n.by }]));
   position.set(root, { x: 0, y: 0 });
   const clearance = Math.max(8, Math.min(28, spacing * 0.35));
-  const cellSize = Math.max(...nodes.map((n) => Math.max(n.w, n.h))) + clearance;
-  const index = new Map(nodes.map((n, i) => [n, i]));
+  const soft = tuning.repel * 0.6;
+  const cellSize = Math.max(...[root, ...nodes].map((n) => Math.max(n.w, n.h))) + clearance + soft;
+  const bodies = [root, ...nodes];
+  const index = new Map(bodies.map((n, i) => [n, i]));
   const treeLinks = nodes.map((n) => ({ from: parent.get(n)!, to: n }));
   const crossSprings = crossLinks.filter((e) => sectors.has(e.from) && sectors.has(e.to));
   const add = (n: MapNode, x: number, y: number) => {
@@ -295,9 +323,14 @@ function settleRadial(
     f.x += x;
     f.y += y;
   };
-  const radius = (n: MapNode) => Math.hypot(n.w / 2, n.h / 2);
+  // Half-size of a node's box along a direction, so wide boxes don't count their diagonal.
+  const extent = (n: MapNode, ux: number, uy: number) =>
+    Math.min(n.w / 2 / (Math.abs(ux) || 1e-6), n.h / 2 / (Math.abs(uy) || 1e-6));
 
-  const steps = nodes.length > 800 ? 100 : 160;
+  const steps = nodes.length > 800 ? 100 : 220;
+  const linkK = 0.006 + tuning.linkStrength * 0.0004;
+  const crossK = tuning.crossPull * 0.0001;
+  const pull = tuning.gravity * 0.00006;
   for (let step = 0; step < steps; step++) {
     for (const n of nodes) forces.set(n, { x: 0, y: 0 });
 
@@ -307,8 +340,8 @@ function settleRadial(
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const length = Math.hypot(dx, dy) || 1;
-      const target = radius(from) + radius(to) + spacing * 0.55;
-      const force = (length - target) * 0.028;
+      const target = extent(from, dx / length, dy / length) + extent(to, dx / length, dy / length) + tuning.linkDistance;
+      const force = (length - target) * linkK;
       add(to, -dx / length * force, -dy / length * force);
       if (from !== root) add(from, dx / length * force, dy / length * force);
     }
@@ -319,21 +352,21 @@ function settleRadial(
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const length = Math.hypot(dx, dy) || 1;
-      const target = (radius(from) + radius(to) + spacing) * 2;
-      const force = Math.max(0, length - target) * 0.004;
+      const target = (extent(from, dx / length, dy / length) + extent(to, dx / length, dy / length) + spacing) * 2;
+      const force = Math.max(0, length - target) * crossK;
       add(to, -dx / length * force, -dy / length * force);
       add(from, dx / length * force, dy / length * force);
     }
 
     const cells = new Map<string, MapNode[]>();
-    for (const n of nodes) {
+    for (const n of bodies) {
       const p = position.get(n)!;
       const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)}`;
       const cell = cells.get(key) ?? [];
       cell.push(n);
       cells.set(key, cell);
     }
-    for (const a of nodes) {
+    for (const a of bodies) {
       const pa = position.get(a)!;
       const cx = Math.floor(pa.x / cellSize);
       const cy = Math.floor(pa.y / cellSize);
@@ -344,10 +377,13 @@ function settleRadial(
             const pb = position.get(b)!;
             const dx = pb.x - pa.x;
             const dy = pb.y - pa.y;
-            const overlapX = (a.w + b.w) / 2 + clearance - Math.abs(dx);
-            const overlapY = (a.h + b.h) / 2 + clearance - Math.abs(dy);
+            const hardX = (a.w + b.w) / 2 + clearance - Math.abs(dx);
+            const hardY = (a.h + b.h) / 2 + clearance - Math.abs(dy);
+            const overlapX = hardX + soft;
+            const overlapY = hardY + soft;
             if (overlapX <= 0 || overlapY <= 0) continue;
-            const force = Math.max(overlapX, overlapY) * 20;
+            const hard = hardX > 0 && hardY > 0;
+            const force = hard ? Math.max(hardX, hardY) * 20 + Math.min(overlapX, overlapY) * 0.3 : Math.min(overlapX, overlapY) * 0.3;
             const distance = Math.hypot(dx, dy) || 1;
             add(a, -dx / distance * force, -dy / distance * force);
             add(b, dx / distance * force, dy / distance * force);
@@ -362,8 +398,8 @@ function settleRadial(
       const p = position.get(n)!;
       const v = velocities.get(n)!;
       const f = forces.get(n)!;
-      let vx = (v.x + f.x - p.x * 0.0012) * 0.72;
-      let vy = (v.y + f.y - p.y * 0.0012) * 0.72;
+      let vx = (v.x + f.x - p.x * pull) * 0.72;
+      let vy = (v.y + f.y - p.y * pull) * 0.72;
       const speed = Math.hypot(vx, vy);
       if (speed > maxMove) {
         vx *= maxMove / speed;
@@ -374,12 +410,15 @@ function settleRadial(
       let y = p.y + vy;
       const [start, end] = sectors.get(n)!;
       const center = angles.get(n)!;
-      const angularSlack = (end - start) * 0.15;
+      const angularSlack = (end - start) * tuning.looseness / 100;
       const theta = clampToSector(Math.atan2(y, x), center - angularSlack, center + angularSlack);
       let dist = Math.hypot(x, y);
       const parentNode = parent.get(n)!;
       const parentPos = position.get(parentNode)!;
-      const minimumRadius = Math.hypot(parentPos.x, parentPos.y) + radius(parentNode) + radius(n) + clearance * 0.35;
+      const ux = Math.cos(theta);
+      const uy = Math.sin(theta);
+      const minimumRadius =
+        Math.hypot(parentPos.x, parentPos.y) + extent(parentNode, ux, uy) + extent(n, ux, uy) + clearance * 0.35;
       dist = Math.max(dist, minimumRadius);
       x = Math.cos(theta) * dist;
       y = Math.sin(theta) * dist;
