@@ -115,6 +115,6 @@
 .ma-h4 { font-size: 1.1em; } .ma-h5, .ma-h6 { font-size: 1em; }
 .mind-atlas-container.is-editor-hidden > .mind-atlas-editor-pane, .mind-atlas-container.is-editor-hidden > .mind-atlas-divider, .mind-atlas-container.is-prompting > .mind-atlas-editor-pane, .mind-atlas-container.is-prompting > .mind-atlas-divider { display: none; }
 .mind-atlas-container.is-keyboard { background: var(--background-primary); }
-.mind-atlas-container.is-keyboard > .mind-atlas-editor-pane { max-height: 55%; }
+.mind-atlas-container.is-keyboard:not(.is-editor-right) > .mind-atlas-editor-pane { max-height: 55%; }
 .mind-atlas-debug { position: absolute; left: 4px; top: 100px; right: 4px; background: var(--background-primary); z-index: 99; font-size: 10px; color: var(--text-faint); pointer-events: none; display: none; }
 .is-mobile .mind-atlas-debug { display: block; }

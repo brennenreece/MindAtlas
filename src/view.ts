@@ -191,27 +191,30 @@ export class MindAtlasView extends ItemView {
       return a instanceof HTMLElement && el.contains(a) && (a.isContentEditable || a.tagName === "INPUT" || a.tagName === "TEXTAREA");
     };
     const dbg = el.createDiv("mind-atlas-debug");
+    const pane = () => el.querySelector<HTMLElement>(":scope > .mind-atlas-editor-pane");
     const release = () => {
       el.removeClass("is-keyboard");
       el.style.height = "";
+      this.mapEl.style.height = "";
+      if (pane()) pane()!.style.removeProperty("height");
     };
-    // The iOS keyboard covers the page instead of resizing it. End this view where the
-    // keyboard begins. The view's top edge doesn't depend on its height, so this can't feed back.
+    // While the keyboard is up, Obsidian shrinks the leaf but the flex children collapse to
+    // zero height. Give the view and its children explicit pixel heights from the leaf.
     const sync = () => {
       if (!vv) return;
-      const r = el.getBoundingClientRect();
-      const visibleBottom = vv.offsetTop + vv.height;
       const kb = editing();
-      const rc = (e: Element | null) => { if (!e) return "-"; const b = e.getBoundingClientRect(); return `${Math.round(b.top)}/${Math.round(b.height)}`; };
-      const g = this.group.getAttribute("transform") ?? "none";
-      const cs = getComputedStyle(el), ms = getComputedStyle(this.mapEl);
-      const info = `el ${cs.display}/${cs.flexDirection}/${cs.height}/${cs.position} cls ${el.className.replace(/mind-atlas-|view-content/g, "")} par ${el.parentElement?.className}/${Math.round(el.parentElement?.getBoundingClientRect().height ?? 0)} map ${ms.display}/${ms.height}/${ms.flex} kids ${el.children.length}`;
-      dbg.setText(info + ` | map ${rc(this.mapEl)} svg ${rc(this.svg)} ed ${rc(this.contentEl.querySelector(".mind-atlas-editor-pane"))} sc ${this.mapEl.scrollTop},${this.mapEl.scrollLeft},${el.scrollTop} kb ${el.hasClass("is-keyboard")} g ${g} | vv ${Math.round(vv.height)} top ${Math.round(vv.offsetTop)} | win ${window.innerHeight} | view top ${Math.round(r.top)} h ${Math.round(r.height)} | edit ${kb}`);
+      const parentH = el.parentElement?.clientHeight ?? 0;
+      const r = el.getBoundingClientRect();
+      const m = this.mapEl.getBoundingClientRect();
+      dbg.setText(`kb ${kb} leaf ${parentH} view ${Math.round(r.height)} map ${Math.round(m.width)}x${Math.round(m.height)} vv ${Math.round(vv.height)} win ${window.innerHeight}`);
       if (!kb) return release();
-      const natural = window.innerHeight - r.top;
-      if (visibleBottom > natural - 40) return release();
+      if (parentH < 100) return;
       el.addClass("is-keyboard");
-      el.style.height = `${Math.max(220, visibleBottom - r.top)}px`;
+      el.style.height = `${parentH}px`;
+      if (el.hasClass("is-editor-right")) {
+        this.mapEl.style.height = `${parentH}px`;
+        pane()?.style.setProperty("height", `${parentH}px`);
+      }
     };
     vv?.addEventListener("resize", sync);
     vv?.addEventListener("scroll", sync);
