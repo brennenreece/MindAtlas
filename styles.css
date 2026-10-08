@@ -120,3 +120,4 @@
 .is-mobile .mind-atlas-container.show-debug .mind-atlas-debug { display: block; }
 
 .mind-atlas-editor { min-height: 0; }
+.mind-atlas-container.is-keyboard.is-editor-right > .mind-atlas-map, .mind-atlas-container.is-keyboard.is-editor-right > .mind-atlas-editor-pane { height: var(--ma-h) !important; max-height: none; }

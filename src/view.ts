@@ -200,8 +200,7 @@ export class MindAtlasView extends ItemView {
     const release = () => {
       el.removeClass("is-keyboard");
       el.style.height = "";
-      this.mapEl.style.height = "";
-      if (pane()) pane()!.style.removeProperty("height");
+      el.style.removeProperty("--ma-h");
     };
     // While the keyboard is up, Obsidian shrinks the leaf but the flex children collapse to
     // zero height. Give the view and its children explicit pixel heights from the leaf.
@@ -227,10 +226,7 @@ export class MindAtlasView extends ItemView {
       if (parentH < 100) return report(kb, parentH);
       el.addClass("is-keyboard");
       el.style.height = `${parentH}px`;
-      if (el.hasClass("is-editor-right")) {
-        this.mapEl.style.height = `${parentH}px`;
-        pane()?.style.setProperty("height", `${parentH}px`);
-      }
+      el.style.setProperty("--ma-h", `${parentH}px`);
       report(kb, parentH);
     };
     vv?.addEventListener("resize", sync);
