@@ -183,16 +183,47 @@ export class MindAtlasView extends ItemView {
    * out of view when the keyboard opens. Nothing here should ever scroll, so undo it.
    */
   private keepInPlace() {
-    const reset = (e: Event) => {
-      const t = e.target;
-      if (!(t instanceof HTMLElement)) return;
-      if (t === this.contentEl || t === this.mapEl || t === this.editorPane || t.contains(this.contentEl)) {
-        t.scrollTop = 0;
-        t.scrollLeft = 0;
-      }
+    if (!Platform.isMobile) return;
+    const vv = window.visualViewport;
+    let baseline = vv?.height ?? window.innerHeight;
+    const editing = () => {
+      const a = document.activeElement;
+      return a instanceof HTMLElement && this.contentEl.contains(a) && (a.isContentEditable || a.tagName === "INPUT" || a.tagName === "TEXTAREA");
     };
-    this.registerDomEvent(document, "scroll", reset, true);
-    this.registerDomEvent(window, "scroll", () => window.scrollTo(0, 0));
+    const el = this.contentEl;
+    const release = () => {
+      el.removeClass("is-keyboard");
+      el.style.position = el.style.top = el.style.left = el.style.width = el.style.height = el.style.zIndex = "";
+    };
+    // While the keyboard is up, iOS pans the visible area instead of resizing the page, which
+    // slides the whole view off screen. Pin the view to exactly the visible area instead.
+    const sync = () => {
+      if (!vv) return;
+      if (!editing()) baseline = Math.max(baseline, vv.height);
+      const keyboard = editing() && (vv.height < baseline - 80 || vv.offsetTop > 0);
+      if (!keyboard) return release();
+      el.addClass("is-keyboard");
+      el.style.position = "fixed";
+      el.style.top = `${vv.offsetTop}px`;
+      el.style.left = `${vv.offsetLeft}px`;
+      el.style.width = `${vv.width}px`;
+      el.style.height = `${vv.height}px`;
+      el.style.zIndex = "50";
+    };
+    vv?.addEventListener("resize", sync);
+    vv?.addEventListener("scroll", sync);
+    this.registerDomEvent(el, "focusin", () => {
+      sync();
+      window.setTimeout(sync, 300);
+      window.setTimeout(sync, 800);
+    });
+    this.registerDomEvent(el, "focusout", () => window.setTimeout(sync, 100));
+    this.register(() => {
+      vv?.removeEventListener("resize", sync);
+      vv?.removeEventListener("scroll", sync);
+      release();
+    });
+    this.registerDomEvent(document, "scroll", () => window.scrollTo(0, 0), true);
   }
 
   async onOpen() {

@@ -114,3 +114,5 @@
 .ma-codeblock { font-family: var(--font-monospace); background: var(--code-background); }
 .ma-h4 { font-size: 1.1em; } .ma-h5, .ma-h6 { font-size: 1em; }
 .mind-atlas-container.is-editor-hidden > .mind-atlas-editor-pane, .mind-atlas-container.is-editor-hidden > .mind-atlas-divider, .mind-atlas-container.is-prompting > .mind-atlas-editor-pane, .mind-atlas-container.is-prompting > .mind-atlas-divider { display: none; }
+.mind-atlas-container.is-keyboard { background: var(--background-primary); }
+.mind-atlas-container.is-keyboard > .mind-atlas-editor-pane { max-height: 55%; }
