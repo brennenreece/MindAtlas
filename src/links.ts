@@ -1,6 +1,7 @@
 import { App, normalizePath, TFile } from "obsidian";
 
 const CHILDREN_HEADING = /^#{1,6}\s+children\s*$/i;
+const PARENTS_HEADING = /^#{1,6}\s+parents\s*$/i;
 const CONNECTIONS_HEADING = /^#{1,6}\s+connections\s*$/i;
 const ANY_HEADING = /^#{1,6}\s+\S/;
 const WIKILINK = /(!?)\[\[([^\]\n|#^]+)(?:[#^][^\]\n|]*)?(?:\|([^\]\n]*))?\]\]/g;
@@ -100,6 +101,70 @@ function childrenRange(text: string): [number, number] | null {
   return start >= 0 ? [start, text.length] : null;
 }
 
+function sectionRange(text: string, heading: RegExp): [number, number] | null {
+  let pos = 0, start = -1, fenced = false;
+  for (const line of text.split("\n")) {
+    const next = pos + line.length + 1;
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    if (!fenced) {
+      if (start < 0 && heading.test(line)) start = next;
+      else if (start >= 0 && ANY_HEADING.test(line)) return [start, pos];
+    }
+    pos = next;
+  }
+  return start < 0 ? null : [start, text.length];
+}
+
+async function addToSection(app: App, source: TFile, target: TFile, heading: "Children" | "Parents" | "Connections") {
+  const matcher = heading === "Children" ? CHILDREN_HEADING : heading === "Parents" ? PARENTS_HEADING : CONNECTIONS_HEADING;
+  const linktext = app.metadataCache.fileToLinktext(target, source.path, true);
+  await app.vault.process(source, (text) => {
+    const range = sectionRange(text, matcher);
+    if (range && findLinks(app, text, source).some((l) => l.dest.path === target.path && l.start >= range[0] && l.start < range[1])) return text;
+    const link = `- [[${linktext}]]`;
+    if (!range) return `${text.replace(/\s+$/, "")}${text.trim() ? "\n\n" : ""}## ${heading}\n${link}\n`;
+    const at = text.lastIndexOf("\n", range[1] - 1) + 1;
+    return text.slice(0, at) + link + "\n" + text.slice(at);
+  });
+}
+
+/**
+ * Make explicit relationship headings reciprocal.  This never removes prose links:
+ * it only adds the missing paired entry (Children <-> Parents) and gives an
+ * unclassified note link a Connections entry.
+ */
+export async function normalizeRelationships(app: App) {
+  type Relation = { kind: "child" | "parent" | "connection"; source: TFile; target: TFile };
+  const relations: Relation[] = [];
+  for (const source of app.vault.getMarkdownFiles()) {
+    const text = await app.vault.cachedRead(source);
+    const child = sectionRange(text, CHILDREN_HEADING);
+    const parent = sectionRange(text, PARENTS_HEADING);
+    const connection = sectionRange(text, CONNECTIONS_HEADING);
+    const hasStructure = !!child || !!parent || !!connection;
+    for (const link of findLinks(app, text, source)) {
+      const kind = child && link.start >= child[0] && link.start < child[1] ? "child"
+        : parent && link.start >= parent[0] && link.start < parent[1] ? "parent"
+        : connection && link.start >= connection[0] && link.start < connection[1] ? "connection"
+        // Preserve pre-heading maps: a note with no relationship headings used
+        // every link as a child. Once structured, ordinary prose is a reference.
+        : hasStructure ? "connection" : "child";
+      relations.push({ kind, source, target: link.dest });
+    }
+  }
+  for (const r of relations) {
+    if (r.kind === "child") {
+      await addToSection(app, r.source, r.target, "Children");
+      await addToSection(app, r.target, r.source, "Parents");
+    } else if (r.kind === "parent") {
+      await addToSection(app, r.source, r.target, "Parents");
+      await addToSection(app, r.target, r.source, "Children");
+    } else {
+      await addToSection(app, r.source, r.target, "Connections");
+    }
+  }
+}
+
 /** Add `target` to `source`'s "## Children" section. False if it is already listed there. */
 export async function addLink(app: App, source: TFile, target: TFile): Promise<boolean> {
   const linktext = app.metadataCache.fileToLinktext(target, source.path, true);
@@ -145,6 +210,7 @@ export async function addLink(app: App, source: TFile, target: TFile): Promise<b
     lines.splice(at, 0, link);
     return lines.join("\n");
   });
+  if (added) await addToSection(app, target, source, "Parents");
   return added;
 }
 

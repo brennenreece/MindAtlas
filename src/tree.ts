@@ -5,6 +5,7 @@ export interface MapNode {
   title: string;
   // Possibly shortened title shown on the map (set by the view).
   label: string;
+  labelLines: string[];
   children: MapNode[];
   // +1 = outgoing side (right), -1 = backlink side (left), 0 = root.
   side: 1 | -1 | 0;
@@ -45,6 +46,7 @@ export interface Edge {
   // Actual link directions: `fwd` = from links to `to`; `back` = `to` links to from.
   fwd: boolean;
   back: boolean;
+  kind: "child" | "connection";
 }
 
 export interface MapGraph {
@@ -67,11 +69,13 @@ export interface GraphOptions {
 }
 
 const CHILDREN_HEADING = /^#{1,6}\s+children\s*$/i;
+const PARENTS_HEADING = /^#{1,6}\s+parents\s*$/i;
+const CONNECTIONS_HEADING = /^#{1,6}\s+connections\s*$/i;
 const ANY_HEADING = /^#{1,6}\s+\S/;
 const WIKILINK = /\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]/g;
 
 /** Links under a "## Children" heading, or null when the note has no such section. */
-export function parseChildLinks(content: string): string[] | null {
+function parseSectionLinks(content: string, heading: RegExp): string[] | null {
   const out: string[] = [];
   let found = false;
   let inSection = false;
@@ -79,7 +83,7 @@ export function parseChildLinks(content: string): string[] | null {
   for (const line of content.split("\n")) {
     if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
     if (inFence) continue;
-    if (CHILDREN_HEADING.test(line)) {
+    if (heading.test(line)) {
       inSection = true;
       found = true;
       continue;
@@ -89,6 +93,19 @@ export function parseChildLinks(content: string): string[] | null {
     for (const m of line.matchAll(WIKILINK)) out.push(m[1].trim());
   }
   return found ? out : null;
+}
+
+/** Links explicitly listed beneath `## Children`. */
+export function parseChildLinks(content: string): string[] | null {
+  return parseSectionLinks(content, CHILDREN_HEADING);
+}
+
+function parseParentLinks(content: string): string[] | null {
+  return parseSectionLinks(content, PARENTS_HEADING);
+}
+
+function parseConnectionLinks(content: string): string[] | null {
+  return parseSectionLinks(content, CONNECTIONS_HEADING);
 }
 
 function isIgnored(app: App, f: TFile): boolean {
@@ -111,13 +128,12 @@ function resolveAll(app: App, file: TFile, raw: string[]): TFile[] {
   return out;
 }
 
-/** Every note this one links to: "## Children" links first, then the rest in document order. */
+/** Explicit relationship links; prose links deliberately do not affect the map. */
 async function outLinks(app: App, file: TFile): Promise<TFile[]> {
-  const cache = app.metadataCache.getFileCache(file);
   const content = await app.vault.cachedRead(file);
   return resolveAll(app, file, [
     ...(parseChildLinks(content) ?? []),
-    ...(cache?.links ?? []).map((l) => l.link.split("#")[0].split("^")[0]),
+    ...(parseConnectionLinks(content) ?? []),
   ]);
 }
 
@@ -128,16 +144,19 @@ async function outLinks(app: App, file: TFile): Promise<TFile[]> {
  */
 async function childLinks(app: App, file: TFile): Promise<TFile[]> {
   const section = parseChildLinks(await app.vault.cachedRead(file));
-  return section ? resolveAll(app, file, section) : outLinks(app, file);
+  return resolveAll(app, file, section ?? []);
 }
 
-function buildIncomingIndex(app: App): Map<string, string[]> {
+async function connectionLinks(app: App, file: TFile): Promise<TFile[]> {
+  return resolveAll(app, file, parseConnectionLinks(await app.vault.cachedRead(file)) ?? []);
+}
+
+async function buildIncomingChildIndex(app: App): Promise<Map<string, string[]>> {
   const idx = new Map<string, string[]>();
-  const resolved = app.metadataCache.resolvedLinks;
-  for (const src of Object.keys(resolved)) {
-    for (const dest of Object.keys(resolved[src])) {
-      if (!idx.has(dest)) idx.set(dest, []);
-      idx.get(dest)!.push(src);
+  for (const src of app.vault.getMarkdownFiles()) {
+    for (const dest of await childLinks(app, src)) {
+      if (!idx.has(dest.path)) idx.set(dest.path, []);
+      idx.get(dest.path)!.push(src.path);
     }
   }
   return idx;
@@ -162,6 +181,7 @@ export async function buildGraph(
       file,
       title: file.basename,
       label: file.basename,
+      labelLines: [file.basename],
       children: [],
       side,
       depth,
@@ -187,6 +207,10 @@ export async function buildGraph(
   const root = makeNode(rootFile, 0, 0);
   const visited = new Map<string, MapNode>([[rootFile.path, root]]);
   const treeEdges: Edge[] = [];
+  // A visual tree needs one placement parent, but a note may have any number of
+  // semantic parents. The remaining child relationships are drawn as solid edges.
+  const extraChildEdges: Edge[] = [];
+  const extraChildKeys = new Set<string>();
 
   // Outgoing links, breadth-first; each note is placed once, nearest the root.
   let frontier: MapNode[] = [root];
@@ -195,11 +219,20 @@ export async function buildGraph(
     for (const n of frontier) {
       if (n.collapsed) continue;
       for (const f of await childLinks(app, n.file)) {
-        if (visited.has(f.path) || visited.size >= MAX_NODES) continue;
+        const existing = visited.get(f.path);
+        if (existing) {
+          const key = `${n.file.path}\n${existing.file.path}`;
+          if (!treeEdges.some((e) => e.from === n && e.to === existing) && !extraChildKeys.has(key)) {
+            extraChildKeys.add(key);
+            extraChildEdges.push({ from: n, to: existing, fwd: false, back: false, kind: "child" });
+          }
+          continue;
+        }
+        if (visited.size >= MAX_NODES) continue;
         const c = makeNode(f, 1, d + 1, n, n === root ? root.children.length : n.branch);
         visited.set(f.path, c);
         n.children.push(c);
-        treeEdges.push({ from: n, to: c, fwd: false, back: false });
+        treeEdges.push({ from: n, to: c, fwd: false, back: false, kind: "child" });
         next.push(c);
       }
     }
@@ -209,7 +242,7 @@ export async function buildGraph(
   // Backlinks, mirrored on the left.
   const backRoots: MapNode[] = [];
   if (opts.backlinks) {
-    const incoming = buildIncomingIndex(app);
+    const incoming = await buildIncomingChildIndex(app);
     const sources = (f: TFile): TFile[] =>
       (incoming.get(f.path) ?? [])
         .map((p) => app.vault.getAbstractFileByPath(p))
@@ -226,7 +259,7 @@ export async function buildGraph(
           const c = makeNode(f, -1, d + 1, n);
           visited.set(f.path, c);
           (n === root ? backRoots : n.children).push(c);
-          treeEdges.push({ from: n, to: c, fwd: false, back: false });
+          treeEdges.push({ from: n, to: c, fwd: false, back: false, kind: "child" });
           next.push(c);
         }
       }
@@ -241,11 +274,11 @@ export async function buildGraph(
 
   // Linked notes that aren't children of anything float free: no tree edge, just a dashed line.
   if (opts.connections) {
-    const incoming = buildIncomingIndex(app);
+    const incoming = await buildIncomingChildIndex(app);
     for (const n of [...visited.values()]) {
       const kids = new Set((await childLinks(app, n.file)).map((f) => f.path));
       const around = [
-        ...(await outLinks(app, n.file)),
+        ...(await connectionLinks(app, n.file)),
         ...(incoming.get(n.file.path) ?? [])
           .map((p) => app.vault.getAbstractFileByPath(p))
           .filter((x): x is TFile => x instanceof TFile && usable(app, x, n.file)),
@@ -261,7 +294,7 @@ export async function buildGraph(
   }
 
   // Truncation hints for nodes at the depth limit.
-  const incomingIdx = opts.backlinks ? buildIncomingIndex(app) : null;
+  const incomingIdx = opts.backlinks ? await buildIncomingChildIndex(app) : null;
   for (const n of visited.values()) {
     if (n === root || n.children.length) continue;
     if (n.side === 1) {
@@ -280,7 +313,7 @@ export async function buildGraph(
   const pairKey = (a: MapNode, b: MapNode) =>
     a.file.path < b.file.path ? `${a.file.path}\n${b.file.path}` : `${b.file.path}\n${a.file.path}`;
   const drawn = new Set<string>();
-  for (const e of treeEdges) {
+  for (const e of [...treeEdges, ...extraChildEdges]) {
     e.fwd = linked(e.from, e.to);
     e.back = linked(e.to, e.from);
     drawn.add(pairKey(e.from, e.to));
@@ -288,14 +321,15 @@ export async function buildGraph(
 
   // Every other connected pair of visible notes gets one cross-link line.
   const crossLinks: Edge[] = [];
+  crossLinks.push(...extraChildEdges);
   for (const n of visited.values()) {
-    for (const f of await outLinks(app, n.file)) {
+    for (const f of await connectionLinks(app, n.file)) {
       const target = visited.get(f.path);
       if (!target) continue;
       const key = pairKey(n, target);
       if (drawn.has(key)) continue;
       drawn.add(key);
-      crossLinks.push({ from: n, to: target, fwd: true, back: linked(target, n) });
+      crossLinks.push({ from: n, to: target, fwd: true, back: linked(target, n), kind: "connection" });
     }
   }
 

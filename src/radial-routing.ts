@@ -133,13 +133,25 @@ export function cubicControls(a: RouteAnchor, b: RouteAnchor, style: string): [P
   const p2 = b.p;
   const d1 = a.dir;
   const d2 = b.dir;
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const direct = Math.hypot(dx, dy) || 1;
+  const ux = dx / direct;
+  const uy = dy / direct;
+  // When both box exits already point along the direct route, a curve only adds
+  // visual noise. Reserve curves for an actual turn around the node geometry.
+  if (d1.x * ux + d1.y * uy > 0.92 && -d2.x * ux - d2.y * uy > 0.92) {
+    // A degenerate cubic is geometrically a straight line, while retaining the
+    // common cubic representation expected by the layout/routing pipeline.
+    return [p1, p1, p2, p2];
+  }
   const reach = (d: Pt) => Math.abs(d.x) * Math.abs(p2.x - p1.x) + Math.abs(d.y) * Math.abs(p2.y - p1.y);
   const organic = style === "organic";
   const base = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-  const k1 = organic ? 0.62 : 0.5;
-  const k2 = organic ? 0.42 : 0.5;
-  const off1 = Math.min(320, Math.max(28, reach(d1) * k1 + base * 0.12));
-  const off2 = Math.min(320, Math.max(28, reach(d2) * k2 + base * 0.12));
+  const k1 = organic ? 0.46 : 0.30;
+  const k2 = organic ? 0.34 : 0.30;
+  const off1 = Math.min(180, Math.max(18, reach(d1) * k1 + base * 0.05));
+  const off2 = Math.min(180, Math.max(18, reach(d2) * k2 + base * 0.05));
   const bend = organic ? Math.max(-26, Math.min(26, (p2.y - p1.y) * 0.1 + (p2.x - p1.x) * 0.04)) : 0;
   const c1 = { x: p1.x + d1.x * off1 - d1.y * bend, y: p1.y + d1.y * off1 + d1.x * bend };
   const c2 = { x: p2.x + d2.x * off2 + d2.y * bend, y: p2.y + d2.y * off2 - d2.x * bend };

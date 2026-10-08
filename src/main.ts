@@ -1,6 +1,7 @@
 import { registerFeatherIcons } from "./icons";
 import { Notice, Plugin, TFile } from "obsidian";
 import { MindAtlasView, VIEW_TYPE_MINDATLAS } from "./view";
+import { normalizeRelationships } from "./links";
 import { defaultSettings, MindAtlasSettingTab, MindAtlasSettings, sanitizeSettings } from "./settings";
 
 export default class MindAtlasPlugin extends Plugin {
@@ -9,6 +10,8 @@ export default class MindAtlasPlugin extends Plugin {
   async onload() {
     registerFeatherIcons();
     await this.loadSettings();
+    // Keep the explicit relationship sections in sync before any map is drawn.
+    await normalizeRelationships(this.app).catch((err) => console.error("MindAtlas relationship scan failed", err));
     this.registerView(VIEW_TYPE_MINDATLAS, (leaf) => new MindAtlasView(leaf, this));
     this.addSettingTab(new MindAtlasSettingTab(this.app, this));
 

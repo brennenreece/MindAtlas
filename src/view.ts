@@ -624,7 +624,9 @@ export class MindAtlasView extends ItemView {
     const nodeLayer = this.group.createSvg("g");
     const cross = this.plugin.settings.crossLinks;
     for (const e of graph.treeEdges) this.addEdge(edgeLayer, e, false);
-    if (cross !== "never") for (const e of graph.crossLinks) this.addEdge(edgeLayer, e, true);
+    for (const e of graph.crossLinks) {
+      if (e.kind === "child" || cross !== "never") this.addEdge(edgeLayer, e, e.kind === "connection");
+    }
     for (const n of graph.nodes) this.drawNode(nodeLayer, n, n === graph.root);
     this.previewEl = this.group.createSvg("path");
     this.previewEl.addClass("mind-atlas-preview");
@@ -803,35 +805,49 @@ export class MindAtlasView extends ItemView {
     };
   }
 
-  /** Size the node to its (possibly truncated) title plus box padding. */
+  /** Size the node to its full, word-wrapped title plus box padding. */
   private measure(n: MapNode) {
     const f = this.fontOf(n);
     const ctx = this.measureCtx;
     ctx.font = `${f.weight} ${f.px}px ${f.family}`;
     const prefix = n.icon ? `${n.icon} ` : "";
     const full = prefix + n.title;
-    let text = full;
-    let width = ctx.measureText(text).width;
-    if (width > MAX_TEXT_W) {
-      let lo = 1;
-      let hi = text.length;
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi) / 2);
-        if (ctx.measureText(full.slice(0, mid) + "…").width <= MAX_TEXT_W) lo = mid;
-        else hi = mid - 1;
+    const words = full.split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let line = "";
+    for (const word of words) {
+      // Long filenames/URLs have no natural wrap point. Split them at the
+      // largest readable character boundary rather than letting a box grow off
+      // the canvas or silently truncating the title.
+      if (!line && ctx.measureText(word).width > MAX_TEXT_W) {
+        let rest = word;
+        while (rest && ctx.measureText(rest).width > MAX_TEXT_W) {
+          let cut = 1;
+          while (cut < rest.length && ctx.measureText(rest.slice(0, cut + 1)).width <= MAX_TEXT_W) cut++;
+          lines.push(rest.slice(0, cut));
+          rest = rest.slice(cut);
+        }
+        line = rest;
+        continue;
       }
-      text = full.slice(0, lo) + "…";
-      width = ctx.measureText(text).width;
+      const next = line ? `${line} ${word}` : word;
+      if (line && ctx.measureText(next).width > MAX_TEXT_W) {
+        lines.push(line);
+        line = word;
+      } else line = next;
     }
-    n.label = text;
+    if (line || !lines.length) lines.push(line);
+    const width = Math.max(...lines.map((part) => ctx.measureText(part).width));
+    n.labelLines = lines;
+    n.label = lines.join(" ");
     if (this.plugin.settings.showBoxes || n.floating) {
       const pad = this.plugin.settings.boxPadding;
       n.w = Math.ceil(width) + pad * 2;
-      n.h = Math.ceil(f.px * 1.25) + pad * 1.2;
+      n.h = Math.ceil(f.px * 1.25 * lines.length) + pad * 1.2;
     } else {
       // No box: lines attach just outside the text itself.
       n.w = Math.ceil(width) + 10;
-      n.h = Math.ceil(f.px * 1.1) + 4;
+      n.h = Math.ceil(f.px * 1.1 * lines.length) + 4;
     }
     n.iconH = n.iconName && resolveIcon(n.iconName) ? this.plugin.settings.iconSize + 1 : 0;
     n.h += n.iconH;
@@ -846,7 +862,8 @@ export class MindAtlasView extends ItemView {
     el.addClass(cross ? "mind-atlas-cross" : filled ? "mind-atlas-edge-fill" : "mind-atlas-edge");
     if (gray) el.addClass("is-back");
     const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
-    if (!filled) el.style.strokeWidth = String(s.lineWidth * k);
+    // Structural child lines are intentionally stronger than dashed connections.
+    if (!filled) el.style.strokeWidth = String(s.lineWidth * k * (cross ? 0.72 : 1.45));
     const col = gray ? "" : (!cross && this.colorOf(edge.to)) || s.lineColor;
     if (col) {
       if (filled) el.style.fill = col;
@@ -1056,8 +1073,9 @@ export class MindAtlasView extends ItemView {
         const dy = b.p.y - a.p.y;
         const len = Math.hypot(dx, dy) || 1;
         const route = routed.get(this.edgeEls[i].key);
-        const bow = Math.min(70, len * 0.22);
-        const c = route?.control ?? { x: (a.p.x + b.p.x) / 2 - (dy / len) * bow, y: (a.p.y + b.p.y) / 2 + (dx / len) * bow };
+        // The router tries the straight segment first; only bend when it must
+        // avoid a note or an already-routed line.
+        const c = route?.control ?? { x: (a.p.x + b.p.x) / 2, y: (a.p.y + b.p.y) / 2 };
         const d = `M${a.p.x},${a.p.y} Q${c.x},${c.y} ${b.p.x},${b.p.y}`;
         el.setAttribute("d", d);
         this.edgeEls[i].hit.setAttribute("d", d);
@@ -1149,13 +1167,19 @@ export class MindAtlasView extends ItemView {
     const text = g.createSvg("text");
     text.setAttribute("text-anchor", "middle");
     text.setAttribute("dominant-baseline", "central");
-    text.setAttribute("y", String(n.iconH / 2));
+    const lineHeight = f.px * 1.25;
+    text.setAttribute("y", String(n.iconH / 2 - ((n.labelLines.length - 1) * lineHeight) / 2));
     text.style.fontSize = `${f.px}px`;
     text.style.fontWeight = String(f.weight);
     text.style.fontFamily = f.family;
     if (isRoot && s.showBoxes) text.style.fill = "var(--text-on-accent)";
     else if (n.side !== -1 && this.colorOf(n)) text.style.fill = this.colorOf(n)!;
-    text.textContent = n.label;
+    n.labelLines.forEach((line, index) => {
+      const span = text.createSvg("tspan");
+      span.setAttribute("x", "0");
+      span.setAttribute("dy", index ? String(lineHeight) : "0");
+      span.textContent = line;
+    });
     const title = g.createSvg("title");
     title.textContent = n.title;
 
