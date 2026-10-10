@@ -929,17 +929,14 @@ export class MindAtlasView extends ItemView {
     // Lines touching a backlink note are grayed out.
     const gray = edge.from.side === -1 || edge.to.side === -1 || !!edge.from.floating || !!edge.to.floating;
     const el = layer.createSvg("path");
-    const filled = false;
+    const filled = !cross && s.lineStyle === "organic";
     el.addClass(cross ? "mind-atlas-cross" : filled ? "mind-atlas-edge-fill" : "mind-atlas-edge");
     if (gray) el.addClass("is-back");
     const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
     // Structural child lines are intentionally stronger than dashed connections.
     if (!filled) el.style.strokeWidth = String(s.lineWidth * k * (cross ? 0.72 : 1.45));
     const col = gray ? "" : (!cross && this.colorOf(edge.to)) || s.lineColor;
-    if (col) {
-      if (filled) el.style.fill = col;
-      else el.style.stroke = col;
-    }
+    if (col) el.dataset.color = col;
     const mkHead = () => {
       const h = layer.createSvg("path");
       h.addClass("mind-atlas-head");
@@ -1059,15 +1056,25 @@ export class MindAtlasView extends ItemView {
     return radialBoundaryAnchor(n, other);
   }
 
-  private lineControlPoints(a: Anchor, b: Anchor, style: string): [Pt, Pt, Pt, Pt] | null {
-    return computeCubicControls(a, b, style);
-  }
-
   private linePath(a: Anchor, b: Anchor, style: string, widthK: number, sizeK: [number, number] = [1, 1]): string {
-    const controls = this.lineControlPoints(a, b, style);
-    if (!controls) return `M${a.p.x},${a.p.y} L${b.p.x},${b.p.y}`;
-    const [p1, c1, c2, p2] = controls;
+    const p1 = a.p;
+    const p2 = b.p;
+    if (style === "straight") return `M${p1.x},${p1.y} L${p2.x},${p2.y}`;
+    const d1 = a.dir;
+    const d2 = b.dir;
+    // Handle length follows the distance along each side's own axis, so lines
+    // leave a note cleanly and sweep into the next one in a smooth S.
+    const reach = (d: Pt) => Math.abs(d.x) * Math.abs(p2.x - p1.x) + Math.abs(d.y) * Math.abs(p2.y - p1.y);
     const organic = style === "organic";
+    const base = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    const k1 = organic ? 0.62 : 0.5;
+    const k2 = organic ? 0.42 : 0.5;
+    const off1 = Math.min(320, Math.max(28, reach(d1) * k1 + base * 0.12));
+    const off2 = Math.min(320, Math.max(28, reach(d2) * k2 + base * 0.12));
+    // Organic lines also drift slightly sideways so they feel hand-drawn.
+    const bend = organic ? Math.max(-26, Math.min(26, (p2.y - p1.y) * 0.1 + (p2.x - p1.x) * 0.04)) : 0;
+    const c1 = { x: p1.x + d1.x * off1 - d1.y * bend, y: p1.y + d1.y * off1 + d1.x * bend };
+    const c2 = { x: p2.x + d2.x * off2 + d2.y * bend, y: p2.y + d2.y * off2 - d2.x * bend };
     if (!organic) {
       return `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
     }
@@ -1123,16 +1130,44 @@ export class MindAtlasView extends ItemView {
     this.edgeEls.forEach(({ edge, el, cross, heads, hit, key }, i) => {
       const [a, b] = anchors[i];
       const points = routed.get(key)?.points ?? [a.p, b.p];
-      const d = roundedRoutePath(points, 8);
+      const direct = points.length <= 2;
+      const style = cross && s.lineStyle === "organic" ? "curved" : s.lineStyle;
+      const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
+      // Unobstructed lines use the classic curves (organic ribbon, thick at the
+      // parent); lines blocked by a note follow a smooth detour instead.
+      const ribbon = !cross && direct && s.lineStyle === "organic";
+      let d: string;
+      let bow: Pt | null = null;
+      if (!direct) d = smoothRoutePath(points);
+      else if (cross) {
+        const dx = b.p.x - a.p.x;
+        const dy = b.p.y - a.p.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const amt = Math.min(70, len * 0.22);
+        bow = { x: (a.p.x + b.p.x) / 2 - (dy / len) * amt, y: (a.p.y + b.p.y) / 2 + (dx / len) * amt };
+        d = `M${a.p.x},${a.p.y} Q${bow.x},${bow.y} ${b.p.x},${b.p.y}`;
+      } else {
+        const sz: [number, number] = [this.fontOf(edge.from).px / 18, this.fontOf(edge.to).px / 18];
+        d = this.linePath(a, b, style, k, sz);
+      }
+      el.toggleClass("mind-atlas-edge-fill", ribbon);
+      el.toggleClass("mind-atlas-edge", !cross && !ribbon);
+      const col = el.dataset.color;
+      if (col && !cross) {
+        el.style.fill = ribbon ? col : "";
+        el.style.stroke = ribbon ? "" : col;
+      } else if (col) el.style.stroke = col;
+      if (!cross) el.style.strokeWidth = ribbon ? "" : String(s.lineWidth * k * 1.45);
       el.setAttribute("d", d);
-      hit.setAttribute("d", d);
+      hit.setAttribute("d", !direct || cross ? d : this.linePath(a, b, style === "organic" ? "curved" : style, k));
       // Only hierarchy lines carry an arrowhead, pointing parent -> child.
       heads[0].setAttribute("d", "");
-      const size = 7 + s.lineWidth * 2;
-      heads[1].setAttribute(
-        "d",
-        edge.kind === "child" ? arrowHead(b.p, routeUnit(points[points.length - 2] ?? a.p, b.p), size) : ""
-      );
+      if (edge.kind !== "child") {
+        heads[1].setAttribute("d", "");
+        return;
+      }
+      const dir = direct && style !== "straight" ? { x: -b.dir.x, y: -b.dir.y } : routeUnit(points[points.length - 2] ?? a.p, b.p);
+      heads[1].setAttribute("d", arrowHead(b.p, dir, 7 + s.lineWidth * 2 * k));
     });
   }
 
