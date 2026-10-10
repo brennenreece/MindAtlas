@@ -45,12 +45,10 @@
 .mind-atlas-node.is-selected rect { stroke: var(--interactive-accent); stroke-width: 3; }
 .ma-no-boxes .mind-atlas-node:hover text,
 .ma-no-boxes .mind-atlas-node.is-selected text { fill: var(--text-accent); }
-.mind-atlas-edge-fill { fill: var(--text-faint); stroke: none; }
 .mind-atlas-edge { stroke: var(--text-muted); }
-.mind-atlas-edge-fill { fill: var(--text-muted); }
 .mind-atlas-head { fill: var(--text-muted); stroke: none; pointer-events: none; }
 .mind-atlas-edge.is-back, .mind-atlas-cross.is-back { stroke: var(--text-faint); opacity: 0.5; }
-.mind-atlas-edge-fill.is-back, .mind-atlas-head.is-back { fill: var(--text-faint); opacity: 0.5; }
+.mind-atlas-head.is-back { fill: var(--text-faint); opacity: 0.5; }
 .mind-atlas-node.is-back text { fill: var(--text-faint); }
 
 .mind-atlas-map:focus { outline: none; }
@@ -59,7 +57,7 @@
 .mind-atlas-svg[data-tool="add"] .mind-atlas-node, .mind-atlas-svg[data-tool="link"] .mind-atlas-node { cursor: crosshair; }
 .mind-atlas-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
 .mind-atlas-edge.is-selected, .mind-atlas-cross.is-selected { stroke: var(--interactive-accent); opacity: 1; stroke-width: 3; }
-.mind-atlas-edge-fill.is-selected, .mind-atlas-head.is-selected { fill: var(--interactive-accent); opacity: 1; }
+.mind-atlas-head.is-selected { fill: var(--interactive-accent); opacity: 1; }
 .mind-atlas-preview { fill: none; stroke: var(--interactive-accent); stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
 .mind-atlas-node.is-drop-target rect { stroke: var(--interactive-accent); stroke-width: 3; }
 .mind-atlas-palette { position: absolute; top: 48px; left: 8px; z-index: 2; display: flex; flex-direction: column; gap: 2px; padding: 3px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; }

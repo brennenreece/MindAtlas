@@ -6,31 +6,14 @@ import { addConnection, addLink, createNote, removeChild, removeLinks, sanitizeT
 import { mapToSvg, saveToVault, svgToPng, toOutline } from "./export";
 import { NoteFinder } from "./finder";
 import { askChoice } from "./modals";
-import { applyOffsets, arrange, childMap, Pt } from "./arrange";
+import { applyOffsets, arrange, childMap, relieveBlockers } from "./layout";
+import { arrowHead, LineBox, Pt, routeLine } from "./lines";
 import { UndoStack } from "./undo";
 import { buildGraph, Edge, MapGraph, MapNode } from "./tree";
-import {
-  cubicControls as computeCubicControls,
-  radialBoundaryAnchor,
-  routeCrossLinks as findCrossLinkRoutes,
-} from "./radial-routing";
 
 export const VIEW_TYPE_MINDATLAS = "mind-atlas-view";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MAX_TEXT_W = 320;
-
-type Side = "L" | "R" | "T" | "B";
-interface Anchor {
-  p: Pt;
-  // Unit vector pointing out of the node at this anchor.
-  dir: Pt;
-}
-const SIDE_DIR: Record<Side, Pt> = {
-  L: { x: -1, y: 0 },
-  R: { x: 1, y: 0 },
-  T: { x: 0, y: -1 },
-  B: { x: 0, y: 1 },
-};
 
 // Kelly's 22 colors of maximum contrast.
 const KELLY: [string, string][] = [
@@ -87,11 +70,11 @@ export class MindAtlasView extends ItemView {
   private helpPanel!: HTMLElement;
   private selectedPath: string | null = null;
   private graph: MapGraph | null = null;
-  private layouts = { radial: new Map<string, Pt>(), tree: new Map<string, Pt>(), free: new Map<string, Pt>() };
+  private layouts = { offsets: new Map<string, Pt>(), free: new Map<string, Pt>() };
   private layoutRoot: string | null = null;
   private layoutTimer: number | null = null;
   private get offsets() {
-    return this.layouts[this.plugin.settings.layoutMode];
+    return this.layouts.offsets;
   }
   private get free() {
     return this.layouts.free;
@@ -101,9 +84,7 @@ export class MindAtlasView extends ItemView {
   private dragging: MapNode | null = null;
   private menuCenterBtn!: HTMLElement;
   private openIconPalette: () => void = () => {};
-  private layoutBtn!: HTMLButtonElement;
-  private forceBtn!: HTMLButtonElement;
-  private lineEngineSelect!: HTMLSelectElement;
+  private spreadBtn!: HTMLButtonElement;
   private undo = new UndoStack(this.app, () => this.scheduleRefresh());
   private nodeEls = new Map<MapNode, SVGGElement>();
   private edgeEls: {
@@ -413,38 +394,8 @@ export class MindAtlasView extends ItemView {
       void this.plugin.saveSettings();
     };
 
-    this.layoutBtn = bar.createEl("button");
-    this.layoutBtn.onclick = () => {
-      const s = this.plugin.settings;
-      s.layoutMode = s.layoutMode === "radial" ? "tree" : "radial";
-      void this.plugin.saveSettings();
-    };
-    this.forceBtn = bar.createEl("button", { attr: { title: "Adjust repel and gravity for the radial force layout" } });
-    this.forceBtn.onclick = () => this.cycleForcePreset();
-    this.lineEngineSelect = bar.createEl("select", { attr: { title: "Choose a line engine from recent releases" } });
-    const engines: [string, string][] = [
-      ["0.1.16", "0.1.16 · Radial map"],
-      ["0.1.17", "0.1.17 · Force settling"],
-      ["0.1.18", "0.1.18 · Tuned force layout"],
-      ["0.1.19", "0.1.19 · Explicit relationships"],
-      ["0.1.20", "0.1.20 · Relationship routing"],
-      ["0.1.21", "0.1.21 · Routed"],
-      ["0.1.22", "0.1.22 · Rounded"],
-      ["0.1.23", "0.1.23 · Elbows"],
-      ["0.1.24", "0.1.24 · Bézier"],
-      ["0.1.25", "0.1.25 · Organic Bézier"],
-      ["0.1.26", "0.1.26 · Dynamic lanes"],
-      ["0.1.27", "0.1.27 · Direct lines"],
-      ["0.1.28", "0.1.28 · Anchored lines"],
-      ["0.1.29", "0.1.29 · Full catalog"],
-    ];
-    engines.forEach(([version, label]) => this.lineEngineSelect.createEl("option", { text: label, value: version }));
-    this.lineEngineSelect.value = this.plugin.settings.lineEngine;
-    this.lineEngineSelect.onchange = () => {
-      this.plugin.settings.lineEngine = this.lineEngineSelect.value as typeof this.plugin.settings.lineEngine;
-      void this.plugin.saveSettings();
-      this.updatePositions();
-    };
+    this.spreadBtn = bar.createEl("button", { attr: { title: "Change how far branches spread apart" } });
+    this.spreadBtn.onclick = () => this.cycleSpread();
 
     minus.onclick = () => this.setDepth(this.depth - 1);
     plus.onclick = () => this.setDepth(this.depth + 1);
@@ -455,17 +406,11 @@ export class MindAtlasView extends ItemView {
     this.syncToolbar();
   }
 
-  private cycleForcePreset() {
+  private cycleSpread() {
     const s = this.plugin.settings;
-    const presets = ["compact", "balanced", "spacious"] as const;
-    const current = presets.findIndex((name) =>
-      s.radialTuning.repel === ({ compact: 10, balanced: 25, spacious: 40 }[name]) &&
-      s.radialTuning.gravity === ({ compact: 80, balanced: 60, spacious: 40 }[name])
-    );
-    const next = presets[(current + 1 + presets.length) % presets.length];
-    const values = { compact: { repel: 10, gravity: 80 }, balanced: { repel: 25, gravity: 60 }, spacious: { repel: 40, gravity: 40 } }[next];
-    s.radialTuning.repel = values.repel;
-    s.radialTuning.gravity = values.gravity;
+    const steps = [30, 50, 80];
+    const next = steps.find((v) => v > s.spacing) ?? steps[0];
+    s.spacing = next;
     void this.plugin.saveSettings();
     void this.render(true);
   }
@@ -524,13 +469,10 @@ export class MindAtlasView extends ItemView {
   private syncToolbar() {
     if (this.depthLabel) this.depthLabel.setText(String(this.depth));
     if (this.backlinkBox) this.backlinkBox.checked = this.backlinks;
-    this.layoutBtn?.setText(this.plugin.settings.layoutMode === "radial" ? "Radial" : "Tree");
-    if (this.forceBtn) {
-      const t = this.plugin.settings.radialTuning;
-      const name = t.repel <= 15 && t.gravity >= 70 ? "Tight" : t.repel >= 35 && t.gravity <= 50 ? "Loose" : "Balanced";
-      this.forceBtn.setText(`Force: ${name}`);
+    if (this.spreadBtn) {
+      const v = this.plugin.settings.spacing;
+      this.spreadBtn.setText(`Spread: ${v <= 35 ? "Tight" : v >= 70 ? "Loose" : "Balanced"}`);
     }
-    if (this.lineEngineSelect) this.lineEngineSelect.value = this.plugin.settings.lineEngine;
     if (this.boxBox) this.boxBox.checked = this.plugin.settings.showBoxes;
     if (this.editorBox) this.editorBox.checked = !this.editorHidden;
     this.contentEl.toggleClass("is-editor-hidden", this.editorHidden);
@@ -726,10 +668,10 @@ export class MindAtlasView extends ItemView {
     const cache = this.app.metadataCache.getFileCache(graph.root.file);
     if (!cache) return; // not indexed yet; the metadata "changed" event re-renders later
     this.layoutRoot = path;
-    this.layouts = { radial: new Map(), tree: new Map(), free: new Map() };
+    this.layouts = { offsets: new Map(), free: new Map() };
     const data = cache.frontmatter?.["mindmap-layout"];
     if (!data || typeof data !== "object") return;
-    for (const key of ["radial", "tree", "free"] as const) {
+    for (const key of ["offsets", "free"] as const) {
       const set = (data as Record<string, unknown>)[key];
       if (!set || typeof set !== "object") continue;
       for (const [k, v] of Object.entries(set as Record<string, unknown>)) {
@@ -753,7 +695,7 @@ export class MindAtlasView extends ItemView {
     try {
       await this.app.fileManager.processFrontMatter(file, (fm) => {
         const out: Record<string, Record<string, number[]>> = {};
-        for (const key of ["radial", "tree", "free"] as const) {
+        for (const key of ["offsets", "free"] as const) {
           if (!L[key].size) continue;
           out[key] = {};
           for (const [k, v] of L[key]) out[key][k] = [Math.round(v.x), Math.round(v.y)];
@@ -812,8 +754,11 @@ export class MindAtlasView extends ItemView {
     const g = this.graph;
     if (!g) return;
     const s = this.plugin.settings;
-    arrange(g.root, g.treeEdges, s.layoutMode, s.spacing, g.crossLinks, s.radialTuning);
+    arrange(g.root, g.treeEdges, s.spacing, g.crossLinks);
     applyOffsets(g.root, g.treeEdges, this.offsets, this.free, g.nodes);
+    // Lines feed back into placement: nudge notes that sit on a hierarchy line.
+    const locked = new Set(g.nodes.filter((n) => this.offsets.has(n.file.path) || this.free.has(n.file.path)));
+    relieveBlockers(g.root, g.treeEdges, g.nodes, locked);
     if (snap || g.nodes.length > 600) {
       for (const n of g.nodes) {
         n.x = n.gx;
@@ -845,7 +790,7 @@ export class MindAtlasView extends ItemView {
           moving = true;
         }
       }
-      this.updatePositions(false);
+      this.updatePositions();
       if (moving || this.dragging) this.animFrame = requestAnimationFrame(step);
       else this.updatePositions();
     };
@@ -929,14 +874,10 @@ export class MindAtlasView extends ItemView {
     // Lines touching a backlink note are grayed out.
     const gray = edge.from.side === -1 || edge.to.side === -1 || !!edge.from.floating || !!edge.to.floating;
     const el = layer.createSvg("path");
-    const filled = false;
-    el.addClass(cross ? "mind-atlas-cross" : filled ? "mind-atlas-edge-fill" : "mind-atlas-edge");
+    el.addClass(cross ? "mind-atlas-cross" : "mind-atlas-edge");
     if (gray) el.addClass("is-back");
-    const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
-    // Structural child lines are intentionally stronger than dashed connections.
-    if (!filled) el.style.strokeWidth = String(s.lineWidth * k * (cross ? 0.72 : 1.45));
     const col = gray ? "" : (!cross && this.colorOf(edge.to)) || s.lineColor;
-    if (col) el.dataset.color = col;
+    if (col) el.style.stroke = col;
     const mkHead = () => {
       const h = layer.createSvg("path");
       h.addClass("mind-atlas-head");
@@ -969,189 +910,33 @@ export class MindAtlasView extends ItemView {
     }
   }
 
-  /** Which side of each box a line leaves/enters, from the relative positions. */
-  private sidesFor(a: MapNode, b: MapNode): [Side, Side] {
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const gapX = Math.abs(dx) - (a.w + b.w) / 2;
-    const gapY = Math.abs(dy) - (a.h + b.h) / 2;
-    if (gapX >= gapY) return dx >= 0 ? ["R", "L"] : ["L", "R"];
-    return dy >= 0 ? ["B", "T"] : ["T", "B"];
-  }
-
-  /**
-   * Choose where every line meets its nodes. A left, right or bottom side takes
-   * at most one line (the straightest); extra lines move to the top. Lines
-   * sharing a side are spaced evenly about its center.
-   */
-  private computeAnchors(): Anchor[][] {
-    interface End {
-      node: MapNode;
-      other: MapNode;
-      side: Side;
-      entry: number;
-      end: 0 | 1;
-    }
-    const ends: End[] = [];
-    const radial = this.plugin.settings.layoutMode === "radial";
-    this.edgeEls.forEach(({ edge, cross }, i) => {
-      // Structural and relationship lines share the same boundary allocator.
-      // That means every child gets its own ordered lane on the parent box,
-      // rather than many branches leaving through one visual point.
-      if (cross || radial) return;
-      const [sa, sb] = this.sidesFor(edge.from, edge.to);
-      ends.push({ node: edge.from, other: edge.to, side: sa, entry: i, end: 0 });
-      ends.push({ node: edge.to, other: edge.from, side: sb, entry: i, end: 1 });
-    });
-
-    const group = () => {
-      const m = new Map<string, End[]>();
-      for (const e of ends) {
-        const k = `${e.node.file.path}|${e.side}`;
-        if (!m.has(k)) m.set(k, []);
-        m.get(k)!.push(e);
-      }
-      return m;
-    };
-
-    for (const list of group().values()) {
-      const side = list[0].side;
-      if (side === "T" || list.length < 2) continue;
-      const offAxis = (e: End) =>
-        side === "L" || side === "R" ? Math.abs(e.other.y - e.node.y) : Math.abs(e.other.x - e.node.x);
-      list.sort((a, b) => offAxis(a) - offAxis(b) || a.entry - b.entry);
-      for (const e of list.slice(1)) e.side = "T";
-    }
-
-    const out: Anchor[][] = this.edgeEls.map(({ edge, cross }) =>
-      cross || radial
-        ? [this.boundaryAnchor(edge.from, edge.to), this.boundaryAnchor(edge.to, edge.from)]
-        : [
-            { p: { x: 0, y: 0 }, dir: SIDE_DIR.R },
-            { p: { x: 0, y: 0 }, dir: SIDE_DIR.L },
-          ]
-    );
-    for (const list of group().values()) {
-      const { node, side } = list[0];
-      const vertical = side === "L" || side === "R";
-      list.sort(
-        (a, b) => (vertical ? a.other.y - b.other.y : a.other.x - b.other.x) || a.entry - b.entry
-      );
-      const n = list.length;
-      const span = (vertical ? node.h : node.w) * 0.8;
-      const step = n === 1 ? 0 : Math.min(span / (n - 1), vertical ? 11 : 16);
-      list.forEach((e, k) => {
-        const off = (k - (n - 1) / 2) * step;
-        const p = vertical
-          ? { x: node.x + (side === "R" ? node.w / 2 : -node.w / 2), y: node.y + off }
-          : { x: node.x + off, y: node.y + (side === "B" ? node.h / 2 : -node.h / 2) };
-        out[e.entry][e.end] = { p, dir: SIDE_DIR[side] };
-      });
-    }
-    return out;
-  }
-
-  /** Where a line from `n` toward `other` leaves the node's box, and which way it heads. */
-  private boundaryAnchor(n: MapNode, other: Pt): Anchor {
-    return radialBoundaryAnchor(n, other);
-  }
-
-  private linePath(a: Anchor, b: Anchor, style: string, widthK: number, sizeK: [number, number] = [1, 1]): string {
-    const p1 = a.p;
-    const p2 = b.p;
-    if (style === "straight") return `M${p1.x},${p1.y} L${p2.x},${p2.y}`;
-    const d1 = a.dir;
-    const d2 = b.dir;
-    // Handle length follows the distance along each side's own axis, so lines
-    // leave a note cleanly and sweep into the next one in a smooth S.
-    const reach = (d: Pt) => Math.abs(d.x) * Math.abs(p2.x - p1.x) + Math.abs(d.y) * Math.abs(p2.y - p1.y);
-    const organic = style === "organic";
-    const base = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    const k1 = organic ? 0.62 : 0.5;
-    const k2 = organic ? 0.42 : 0.5;
-    const off1 = Math.min(320, Math.max(28, reach(d1) * k1 + base * 0.12));
-    const off2 = Math.min(320, Math.max(28, reach(d2) * k2 + base * 0.12));
-    // Organic lines also drift slightly sideways so they feel hand-drawn.
-    const bend = organic ? Math.max(-26, Math.min(26, (p2.y - p1.y) * 0.1 + (p2.x - p1.x) * 0.04)) : 0;
-    const c1 = { x: p1.x + d1.x * off1 - d1.y * bend, y: p1.y + d1.y * off1 + d1.x * bend };
-    const c2 = { x: p2.x + d2.x * off2 + d2.y * bend, y: p2.y + d2.y * off2 - d2.x * bend };
-    if (!organic) {
-      return `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
-    }
-
-    // Organic: a filled ribbon that is thick at the parent and tapers to the child.
-    const w0 = (this.plugin.settings.lineWidth * 2.6 * widthK * sizeK[0]) / 2;
-    const w1 = (this.plugin.settings.lineWidth * 0.5 * widthK * Math.min(sizeK[0], sizeK[1])) / 2;
-    const N = 20;
-    const left: Pt[] = [];
-    const right: Pt[] = [];
-    for (let i = 0; i <= N; i++) {
-      const t = i / N;
-      const u = 1 - t;
-      const x = u * u * u * p1.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p2.x;
-      const y = u * u * u * p1.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p2.y;
-      let tx = 3 * u * u * (c1.x - p1.x) + 6 * u * t * (c2.x - c1.x) + 3 * t * t * (p2.x - c2.x);
-      let ty = 3 * u * u * (c1.y - p1.y) + 6 * u * t * (c2.y - c1.y) + 3 * t * t * (p2.y - c2.y);
-      const len = Math.hypot(tx, ty) || 1;
-      tx /= len;
-      ty /= len;
-      const hw = w0 + (w1 - w0) * (1 - Math.pow(1 - t, 1.5));
-      left.push({ x: x - ty * hw, y: y + tx * hw });
-      right.push({ x: x + ty * hw, y: y - tx * hw });
-    }
-    const pts = [...left, ...right.reverse()];
-    return "M" + pts.map((q) => `${q.x.toFixed(1)},${q.y.toFixed(1)}`).join(" L") + " Z";
-  }
-
-  /** Move existing DOM elements to the layout's current positions. */
-  private updatePositions(routeCrossLinks = true) {
+  /** Redraw every line at the nodes' current positions. */
+  private updatePositions() {
     for (const [n, el] of this.nodeEls) {
       el.setAttribute("transform", `translate(${n.x} ${n.y})`);
       this.positions.set(n.file.path, { x: n.x, y: n.y });
     }
     const s = this.plugin.settings;
-    const anchors = this.computeAnchors();
     this.positionMenu();
     this.positionInline();
     this.updatePreview();
-    const boxes = this.graph?.nodes.map((n) => ({ id: n.file.path, x: n.x, y: n.y, w: n.w, h: n.h })) ?? [];
-    // Every line is a straight segment, detouring with straight bends only when
-    // a note is in the way. Hierarchy lines are routed first so they win.
-    const links = this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
-      if (el.hasClass("is-hidden")) return [];
-      const [a, b] = anchors[i];
-      return [{ key, source: edge.from.file.path, target: edge.to.file.path, start: a.p, end: b.p, strict: !cross }];
-    });
-    const routed = findCrossLinkRoutes(
-      links.filter((l) => l.strict).concat(links.filter((l) => !l.strict)),
-      boxes,
-      []
-    );
-    this.edgeEls.forEach(({ edge, el, cross, heads, hit, key }, i) => {
-      const [a, b] = anchors[i];
-      const points = routed.get(key)?.points ?? [a.p, b.p];
-      const direct = points.length <= 2;
+    const boxes: LineBox[] = this.graph?.nodes.map((n) => ({ id: n.file.path, x: n.x, y: n.y, w: n.w, h: n.h })) ?? [];
+    const boxOf = new Map(boxes.map((b) => [b.id, b]));
+    this.edgeEls.forEach(({ edge, el, cross, heads, hit }) => {
+      const a = boxOf.get(edge.from.file.path);
+      const b = boxOf.get(edge.to.file.path);
+      if (!a || !b) return;
+      const shape = routeLine(a, b, boxes);
       const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
-      // Straight when the way is clear; otherwise a gentle curve around the obstacle.
-      const d = direct ? `M${a.p.x},${a.p.y} L${b.p.x},${b.p.y}` : smoothRoutePath(points);
-      el.toggleClass("mind-atlas-edge-fill", false);
-      el.toggleClass("mind-atlas-edge", !cross);
-      const col = el.dataset.color;
-      if (col) {
-        el.style.fill = "";
-        el.style.stroke = col;
-      }
-      if (!cross) el.style.strokeWidth = String(s.lineWidth * k * 1.45);
-      el.setAttribute("d", d);
-      hit.setAttribute("d", d);
+      el.style.strokeWidth = String(s.lineWidth * k * (cross ? 0.72 : 1.45));
+      el.setAttribute("d", shape.d);
+      hit.setAttribute("d", shape.d);
       // Only hierarchy lines carry an arrowhead, pointing parent -> child.
       heads[0].setAttribute("d", "");
-      if (edge.kind !== "child") {
-        heads[1].setAttribute("d", "");
-        return;
-      }
-      const dir = routeUnit(points[points.length - 2] ?? a.p, b.p);
-      heads[1].setAttribute("d", arrowHead(b.p, dir, 7 + s.lineWidth * 2 * k));
+      heads[1].setAttribute(
+        "d",
+        edge.kind === "child" ? arrowHead(shape.end, shape.endDir, 7 + s.lineWidth * 2 * k) : ""
+      );
     });
   }
 
@@ -1855,16 +1640,14 @@ export class MindAtlasView extends ItemView {
     const g = this.graph;
     if (!g) return;
     const cur = this.nodeByPath(this.selectedPath) ?? g.root;
-    const radial = this.plugin.settings.layoutMode === "radial";
     let next: MapNode | undefined;
     if (key === "ArrowUp") next = this.parentOf(cur);
     else if (key === "ArrowDown") next = g.treeEdges.find((e) => e.from === cur)?.to;
     else if (key === "ArrowLeft" || key === "ArrowRight") {
-      // Radial: clockwise around the center, starting at the top. Tree: top to bottom per side.
-      const order = (m: MapNode) =>
-        radial ? (Math.atan2(m.y - g.root.y, m.x - g.root.x) + Math.PI / 2 + Math.PI * 4) % (Math.PI * 2) : m.y;
+      // Clockwise around the center, starting at the top.
+      const order = (m: MapNode) => (Math.atan2(m.y - g.root.y, m.x - g.root.x) + Math.PI / 2 + Math.PI * 4) % (Math.PI * 2);
       const same = g.nodes
-        .filter((m) => m.depth === cur.depth && (radial || m.side === cur.side))
+        .filter((m) => m.depth === cur.depth)
         .sort((a, b) => order(a) - order(b) || a.x - b.x);
       next = same[same.indexOf(cur) + (key === "ArrowRight" ? 1 : -1)];
     }
@@ -1933,8 +1716,7 @@ export class MindAtlasView extends ItemView {
         if (m.has(old)) m.set(newPath, m.get(old)!);
         m.delete(old);
       };
-      move(this.layouts.radial);
-      move(this.layouts.tree);
+      move(this.layouts.offsets);
       move(this.free);
       this.saveLayout();
       move(this.positions);
@@ -2261,17 +2043,7 @@ export class MindAtlasView extends ItemView {
   /** Where a new child of `n` should appear: continuing outward from its parent, clear of other notes. */
   private newChildSpot(n: MapNode): { pos: Pt; anchor: "left" | "right" } {
     const g = this.graph;
-    if (this.plugin.settings.layoutMode === "tree" || !g) {
-      const kids = (g?.treeEdges ?? []).filter((e) => e.from === n && e.to.side === n.side).map((e) => e.to);
-      const dir = n.side === -1 ? -1 : 1;
-      return {
-        pos: {
-          x: n.x + dir * (n.w / 2 + 70),
-          y: kids.length ? Math.max(...kids.map((k) => k.y + k.h)) + 20 : n.y,
-        },
-        anchor: dir === -1 ? "right" : "left",
-      };
-    }
+    if (!g) return { pos: { x: n.x + n.w / 2 + 70, y: n.y }, anchor: "left" };
     const parent = this.parentOf(n);
     let base = parent ? Math.atan2(n.y - parent.y, n.x - parent.x) : n.side === -1 ? Math.PI : 0;
     if (!parent && !g.nodes.some((m) => m !== n)) base = 0;
@@ -2421,31 +2193,19 @@ export class MindAtlasView extends ItemView {
   private drawInlineLine() {
     const i = this.inline;
     if (!i || !i.parent || i.anchor === "center" || !this.group) return;
-    const organic = this.plugin.settings.lineStyle === "organic";
     if (!i.line) i.line = this.group.createSvg("path");
     const line = i.line;
     if (!line.isConnected) this.group.insertBefore(line, this.group.firstChild);
-    line.setAttribute("class", organic ? "mind-atlas-edge-fill" : "mind-atlas-edge");
+    line.setAttribute("class", "mind-atlas-edge");
     line.addClass("is-inline");
     const par = i.parent;
     const right = i.anchor === "left"; // field sits to the right of its parent
     const end = { x: i.pos.x + (right ? -2 : 2), y: i.pos.y };
-    const style = this.plugin.settings.lineStyle;
-    let a: Anchor;
-    const bAnchor: Anchor = { p: end, dir: right ? SIDE_DIR.L : SIDE_DIR.R };
-    if (this.plugin.settings.layoutMode === "radial") {
-      a = this.boundaryAnchor(par, end);
-    } else {
-      a = { p: { x: par.x + (right ? par.w / 2 : -par.w / 2), y: par.y }, dir: right ? SIDE_DIR.R : SIDE_DIR.L };
-    }
-    line.setAttribute("d", this.linePath(a, bAnchor, style, 1, [this.fontOf(par).px / 18, i.px / 18]));
-    const width = this.plugin.settings.lineWidth;
-    if (!organic) line.style.strokeWidth = String(width);
+    const shape = routeLine(par, { x: end.x, y: end.y, w: 0, h: 0 }, []);
+    line.setAttribute("d", shape.d);
+    line.style.strokeWidth = String(this.plugin.settings.lineWidth);
     const c = this.plugin.settings.lineColor;
-    if (c) {
-      if (organic) line.style.fill = c;
-      else line.style.stroke = c;
-    }
+    if (c) line.style.stroke = c;
   }
 
   /** Move `d` (and its branch) so that `t` links to it instead of its old parent. */
@@ -2550,104 +2310,4 @@ export class MindAtlasView extends ItemView {
     }
     this.scheduleRefresh();
   }
-}
-
-/** Triangle with its tip at `tip`, pointing along `dir`. */
-function arrowHead(tip: Pt, dir: Pt, size: number): string {
-  const bx = tip.x - dir.x * size;
-  const by = tip.y - dir.y * size;
-  const w = size * 0.45;
-  const px = -dir.y * w;
-  const py = dir.x * w;
-  return `M${tip.x},${tip.y} L${bx + px},${by + py} L${bx - px},${by - py} Z`;
-}
-
-/** Convert obstacle-routing waypoints into a visually smooth, rounded path. */
-function roundedRoutePath(points: Pt[], radius = 12) {
-  if (points.length < 3) return `M${points[0].x},${points[0].y} L${points[points.length - 1].x},${points[points.length - 1].y}`;
-  let d = `M${points[0].x},${points[0].y}`;
-  for (let i = 1; i < points.length - 1; i++) {
-    const prev = points[i - 1], corner = points[i], next = points[i + 1];
-    const inLen = Math.hypot(corner.x - prev.x, corner.y - prev.y) || 1;
-    const outLen = Math.hypot(next.x - corner.x, next.y - corner.y) || 1;
-    const r = Math.min(radius, inLen / 2, outLen / 2);
-    const before = { x: corner.x + (prev.x - corner.x) * r / inLen, y: corner.y + (prev.y - corner.y) * r / inLen };
-    const after = { x: corner.x + (next.x - corner.x) * r / outLen, y: corner.y + (next.y - corner.y) * r / outLen };
-    d += ` L${before.x},${before.y} Q${corner.x},${corner.y} ${after.x},${after.y}`;
-  }
-  const end = points[points.length - 1];
-  return `${d} L${end.x},${end.y}`;
-}
-
-/** Smooth a routed polyline into a sequence of cubic Bézier segments. */
-function smoothRoutePath(points: Pt[]): string {
-  if (points.length < 2) return "";
-  if (points.length === 2) {
-    const a = points[0], b = points[1];
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const bend = Math.max(18, Math.min(90, Math.hypot(dx, dy) * 0.28));
-    const horizontal = Math.abs(dx) >= Math.abs(dy);
-    const c1 = horizontal ? { x: a.x + Math.sign(dx || 1) * bend, y: a.y } : { x: a.x, y: a.y + Math.sign(dy || 1) * bend };
-    const c2 = horizontal ? { x: b.x - Math.sign(dx || 1) * bend, y: b.y } : { x: b.x, y: b.y - Math.sign(dy || 1) * bend };
-    return `M${a.x},${a.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${b.x},${b.y}`;
-  }
-  let d = `M${points[0].x},${points[0].y}`;
-  for (let i = 0; i < points.length - 1; i++) {
-    const prev = points[i - 1] ?? points[i];
-    const from = points[i];
-    const to = points[i + 1];
-    const next = points[i + 2] ?? to;
-    const c1 = { x: from.x + (to.x - prev.x) / 6, y: from.y + (to.y - prev.y) / 6 };
-    const c2 = { x: to.x - (next.x - from.x) / 6, y: to.y - (next.y - from.y) / 6 };
-    d += ` C${c1.x},${c1.y} ${c2.x},${c2.y} ${to.x},${to.y}`;
-  }
-  return d;
-}
-
-function structuralPathFor(version: string, a: Anchor, b: Anchor): string {
-  // The Oct. 8 builds used the original smooth cubic structural renderer.
-  // Their layout/relationship work changed around it, but the line family
-  // remained the same until obstacle routing was introduced in 0.1.21.
-  if (version === "0.1.16" || version === "0.1.17" || version === "0.1.18" || version === "0.1.19" || version === "0.1.20") {
-    const controls = computeCubicControls(a, b, "curved");
-    if (controls) {
-      const [p1, c1, c2, p2] = controls;
-      return `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
-    }
-  }
-  // 0.1.21 routed around boxes with straight orthogonal segments, before
-  // the rounded-corner pass landed in 0.1.22.
-  if (version === "0.1.21") {
-    const dx = b.p.x - a.p.x;
-    const dy = b.p.y - a.p.y;
-    const horizontal = Math.abs(dx) >= Math.abs(dy);
-    const bend = 0.55;
-    const points = horizontal
-      ? [a.p, { x: a.p.x + dx * bend, y: a.p.y }, { x: a.p.x + dx * bend, y: b.p.y }, b.p]
-      : [a.p, { x: a.p.x, y: a.p.y + dy * bend }, { x: b.p.x, y: a.p.y + dy * bend }, b.p];
-    return `M${points.map((p) => `${p.x},${p.y}`).join(" L")}`;
-  }
-  if (version === "0.1.27" || version === "0.1.28" || version === "0.1.29") {
-    return `M${a.p.x},${a.p.y} L${b.p.x},${b.p.y}`;
-  }
-  if (version === "0.1.24" || version === "0.1.25") {
-    const controls = computeCubicControls(a, b, version === "0.1.25" ? "organic" : "curved");
-    if (controls) {
-      const [p1, c1, c2, p2] = controls;
-      return `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
-    }
-  }
-  const dx = b.p.x - a.p.x;
-  const dy = b.p.y - a.p.y;
-  const horizontal = Math.abs(dx) >= Math.abs(dy);
-  const bend = version === "0.1.26" ? 0.62 : 0.55;
-  const points = horizontal
-    ? [a.p, { x: a.p.x + dx * bend, y: a.p.y }, { x: a.p.x + dx * bend, y: b.p.y }, b.p]
-    : [a.p, { x: a.p.x, y: a.p.y + dy * bend }, { x: b.p.x, y: a.p.y + dy * bend }, b.p];
-  return roundedRoutePath(points, version === "0.1.22" ? 6 : 12);
-}
-
-function routeUnit(from: Pt, to: Pt): Pt {
-  const length = Math.hypot(to.x - from.x, to.y - from.y) || 1;
-  return { x: (to.x - from.x) / length, y: (to.y - from.y) / length };
 }

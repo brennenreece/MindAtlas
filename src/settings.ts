@@ -1,6 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type MindAtlasPlugin from "./main";
-import { RADIAL_PRESETS, RadialTuning } from "./arrange";
 
 export interface MindAtlasSettings {
   // Font sizes in px for H1 (root) .. H6; deeper generations reuse H6.
@@ -14,15 +13,12 @@ export interface MindAtlasSettings {
   boxPadding: number;
   // Empty string = theme accent color.
   boxColor: string;
-  lineStyle: "curved" | "organic" | "straight";
-  lineEngine: "0.1.16" | "0.1.17" | "0.1.18" | "0.1.19" | "0.1.20" | "0.1.21" | "0.1.22" | "0.1.23" | "0.1.24" | "0.1.25" | "0.1.26" | "0.1.27" | "0.1.28" | "0.1.29";
   lineWidth: number;
   // Lines get thinner for deeper generations.
   taperLines: boolean;
   // Empty string = theme faint text color.
   lineColor: string;
   crossLinks: "always" | "hover" | "never";
-  layoutMode: "radial" | "tree";
   branchColors: boolean;
   maxNodes: number;
   iconSize: number;
@@ -31,7 +27,6 @@ export interface MindAtlasSettings {
   defaultDepth: number;
   // Gap in px between linked nodes.
   spacing: number;
-  radialTuning: RadialTuning;
   hasSeenGuide: boolean;
 }
 
@@ -44,13 +39,10 @@ export const DEFAULT_SETTINGS: MindAtlasSettings = {
   boxBorderWidth: 1.5,
   boxPadding: 12,
   boxColor: "",
-  lineStyle: "curved",
-  lineEngine: "0.1.27",
   lineWidth: 1.5,
   taperLines: false,
   lineColor: "",
   crossLinks: "always",
-  layoutMode: "radial",
   branchColors: true,
   maxNodes: 400,
   iconSize: 28,
@@ -58,7 +50,6 @@ export const DEFAULT_SETTINGS: MindAtlasSettings = {
   editorPosition: "bottom",
   defaultDepth: 3,
   spacing: 50,
-  radialTuning: { ...RADIAL_PRESETS.balanced },
   hasSeenGuide: false,
 };
 
@@ -66,7 +57,6 @@ export function defaultSettings(): MindAtlasSettings {
   return {
     ...DEFAULT_SETTINGS,
     headingSizes: [...DEFAULT_SETTINGS.headingSizes],
-    radialTuning: { ...DEFAULT_SETTINGS.radialTuning },
   };
 }
 
@@ -91,9 +81,7 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
     boxBorderWidth: num(s.boxBorderWidth, d.boxBorderWidth, 0, 6),
     boxPadding: num(s.boxPadding, d.boxPadding, 2, 30),
     boxColor: str(s.boxColor, d.boxColor),
-    lineStyle: s.lineStyle === "straight" || s.lineStyle === "organic" ? s.lineStyle : "curved",
-    lineEngine: ["0.1.16", "0.1.17", "0.1.18", "0.1.19", "0.1.20", "0.1.21", "0.1.22", "0.1.23", "0.1.24", "0.1.25", "0.1.26", "0.1.27", "0.1.28", "0.1.29"].includes(s.lineEngine) ? s.lineEngine : d.lineEngine,
-    lineWidth: num(s.lineWidth, d.lineWidth, 0.5, 8),
+      lineWidth: num(s.lineWidth, d.lineWidth, 0.5, 8),
     taperLines: bool(s.taperLines, d.taperLines),
     lineColor: str(s.lineColor, d.lineColor),
     crossLinks:
@@ -102,7 +90,6 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
         : s.showCrossLinks === false
         ? "never"
         : d.crossLinks,
-    layoutMode: s.layoutMode === "tree" ? "tree" : "radial",
     branchColors: bool(s.branchColors, d.branchColors),
     editorPosition: s.editorPosition === "right" || s.editorPosition === "pane" ? s.editorPosition : "bottom",
     showConnections: s.showConnections === true,
@@ -110,14 +97,6 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
     maxNodes: num(s.maxNodes, d.maxNodes, 50, 2000),
     defaultDepth: Math.round(num(s.defaultDepth, d.defaultDepth, 1, 6)),
     spacing: num(s.spacing, d.spacing, 10, 200),
-    radialTuning: {
-      linkDistance: num(s.radialTuning?.linkDistance, d.radialTuning.linkDistance, 0, 150),
-      repel: num(s.radialTuning?.repel, d.radialTuning.repel, 0, 100),
-      gravity: num(s.radialTuning?.gravity, d.radialTuning.gravity, 0, 100),
-      linkStrength: num(s.radialTuning?.linkStrength, d.radialTuning.linkStrength, 0, 100),
-      crossPull: num(s.radialTuning?.crossPull, d.radialTuning.crossPull, 0, 100),
-      looseness: num(s.radialTuning?.looseness, d.radialTuning.looseness, 0, 100),
-    },
     hasSeenGuide: bool(s.hasSeenGuide, d.hasSeenGuide),
   };
 }
@@ -190,55 +169,9 @@ export class MindAtlasSettingTab extends PluginSettingTab {
     // Layout
     new Setting(containerEl).setName("Layout").setHeading();
     slider(containerEl, "Node spacing", 10, 200, 5, () => s.spacing, (v) => (s.spacing = v)).setDesc(
-      "Gap between linked nodes. Nodes arrange themselves; you can also drag them."
+      "Gap between a note and its children. Branches arrange themselves around the center; you can also drag notes."
     );
 
-    new Setting(containerEl)
-      .setName("Radial spacing preset")
-      .setDesc("Quick starting points for the radial force sliders below.")
-      .addDropdown((d) =>
-        d
-          .addOptions({ custom: "Custom", compact: "Compact", balanced: "Balanced", spacious: "Spacious" })
-          .setValue(
-            (["compact", "balanced", "spacious"] as const).find((k) =>
-              (Object.keys(RADIAL_PRESETS[k]) as (keyof RadialTuning)[]).every((f) => RADIAL_PRESETS[k][f] === s.radialTuning[f])
-            ) ?? "custom"
-          )
-          .onChange(async (v) => {
-            if (v === "custom") return;
-            s.radialTuning = { ...RADIAL_PRESETS[v as "compact"] };
-            await save();
-            this.display();
-          })
-      );
-    const tune = (name: string, key: keyof RadialTuning, max: number, desc: string) =>
-      slider(containerEl, name, 0, max, 1, () => s.radialTuning[key], (v) => (s.radialTuning[key] = v)).setDesc(desc);
-    tune("Link distance", "linkDistance", 150, "Target gap between a note and its children (radial layout).");
-    tune("Repel", "repel", 100, "How strongly notes push each other apart.");
-    tune("Gravity", "gravity", 100, "Pull toward the center note; higher is more compact.");
-    tune("Link strength", "linkStrength", 100, "How firmly linked notes pull together.");
-    tune("Cross-link pull", "crossPull", 100, "Attraction from dashed cross-links (0 ignores them).");
-    tune("Branch looseness", "looseness", 100, "How far notes may drift out of their branch's wedge; 0 keeps strict order.");
-    new Setting(containerEl).addButton((b) =>
-      b.setButtonText("Reset radial tuning").onClick(async () => {
-        s.radialTuning = { ...DEFAULT_SETTINGS.radialTuning };
-        await save();
-        this.display();
-      })
-    );
-
-    new Setting(containerEl)
-      .setName("Layout style")
-      .setDesc("Radial spreads branches around the center; tree puts outgoing links right and backlinks left.")
-      .addDropdown((d) =>
-        d
-          .addOptions({ radial: "Radial", tree: "Two-sided tree" })
-          .setValue(s.layoutMode)
-          .onChange(async (v) => {
-            s.layoutMode = v as "radial" | "tree";
-            await save();
-          })
-      );
     new Setting(containerEl)
       .setName("Editor position")
       .setDesc("Where the note editor sits relative to the map. Drag the divider to resize it.")
@@ -346,17 +279,6 @@ export class MindAtlasSettingTab extends PluginSettingTab {
 
     // Lines
     new Setting(containerEl).setName("Lines").setHeading();
-    new Setting(containerEl)
-      .setName("Line style")
-      .addDropdown((d) =>
-        d
-          .addOptions({ curved: "Curved", organic: "Organic (tapered branches)", straight: "Straight" })
-          .setValue(s.lineStyle)
-          .onChange(async (v) => {
-            s.lineStyle = v === "straight" || v === "organic" ? v : "curved";
-            await save();
-          })
-      );
     slider(containerEl, "Line thickness", 0.5, 8, 0.5, () => s.lineWidth, (v) => (s.lineWidth = v));
     new Setting(containerEl)
       .setName("Thinner lines for deeper generations")
