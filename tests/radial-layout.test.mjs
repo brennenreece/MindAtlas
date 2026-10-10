@@ -250,6 +250,18 @@ test("cross-links do not reuse a crossing route when another bend is available",
   assert.equal(crossings, 0);
 });
 
+test("routing can make several turns to clear a run of note boxes", () => {
+  const boxes = [
+    { id: "first", x: 80, y: 0, w: 46, h: 80 },
+    { id: "second", x: 170, y: 75, w: 70, h: 70 },
+  ];
+  const route = routeCrossLinks([{ key: "multi", source: "from", target: "to", start: { x: 0, y: 0 }, end: { x: 260, y: 0 }, strict: true }], boxes, []).get("multi");
+  assert.ok(route.points.length > 2, "adds waypoints when a direct line crosses notes");
+  for (let i = 1; i < route.points.length; i++) {
+    for (const box of boxes) assert.equal(segmentHitsBox(route.points[i - 1], route.points[i], box), false, "route clears every note box");
+  }
+});
+
 function branchy() {
   const root = node("root", 160, 72, 0);
   const nodes = [root];

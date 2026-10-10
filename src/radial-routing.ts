@@ -25,6 +25,7 @@ export interface CrossLinkInput extends Omit<RouteLine, "points"> {
 }
 
 export interface CrossLinkRoute {
+  /** Kept for callers that want a representative bend; paths may have many bends. */
   control: Pt;
   points: Pt[];
 }
@@ -61,27 +62,23 @@ export function routeCrossLinks(
   );
 
   for (const link of ordered) {
-    const len = distance(link.start, link.end) || 1;
-    const bend = Math.max(24, Math.min(90, len * 0.18));
-    const maxBend = Math.max(bend, Math.min(320, len * 0.6));
-    const candidates = [...new Set([0, bend, -bend, bend * 2, -bend * 2, maxBend, -maxBend])];
+    const candidates = [...legacyCandidates(link), ...detourCandidates(link, boxes)];
     let best: CrossLinkRoute | null = null;
     let bestCost = Infinity;
 
-    for (const amount of candidates) {
-      const control = controlPoint(link.start, link.end, amount);
-      const points = sampleQuadratic(link.start, control, link.end);
+    for (const points of candidates) {
       const pathBounds = boundsOf(points);
       const collisions = boxCollisions(points, pathBounds, boxes, link.source, link.target);
       const conflicts = lineConflicts(points, pathBounds, lines, link.source, link.target);
+      // A clear route always wins over a shorter clipping route. Strict tree
+      // edges also prioritize avoiding already-routed structural edges.
       const cost =
-        routeLength(points) * 0.04 +
-        Math.abs(amount) * 0.08 +
-        collisions * 1000000 +
-        conflicts * (link.strict ? 1000 : 1);
+        collisions * 100000000 +
+        conflicts * (link.strict ? 100000 : 100) +
+        routeLength(points) * 0.04;
       if (cost < bestCost) {
         bestCost = cost;
-        best = { control, points };
+        best = { control: points[Math.floor(points.length / 2)], points };
       }
     }
 
@@ -92,6 +89,81 @@ export function routeCrossLinks(
   }
 
   return routes;
+}
+
+function legacyCandidates(link: CrossLinkInput): Pt[][] {
+  const len = distance(link.start, link.end) || 1;
+  const bend = Math.max(24, Math.min(90, len * 0.18));
+  const maxBend = Math.max(bend, Math.min(320, len * 0.6));
+  return [...new Set([0, bend, -bend, bend * 2, -bend * 2, maxBend, -maxBend])]
+    .map((amount) => [link.start, controlPoint(link.start, link.end, amount), link.end]);
+}
+
+/**
+ * Route a polyline around every note box. Each pass detours the first blocked
+ * segment around a padded corner; subsequent passes can add further bends for
+ * clusters of boxes, rather than trying to force every path into one curve.
+ */
+function detourCandidates(link: CrossLinkInput, boxes: RouteBox[]): Pt[][] {
+  const direct = [link.start, link.end];
+  const routes: Pt[][] = [direct];
+  for (const bias of [-1, 1]) {
+    const points = [link.start, link.end];
+    for (let pass = 0; pass < 16; pass++) {
+      let changed = false;
+      for (let i = 1; i < points.length; i++) {
+        const hit = firstHit(points[i - 1], points[i], boxes, link.source, link.target);
+        if (!hit) continue;
+        const corners = cornersToward(points[i - 1], points[i], hit, bias);
+        points.splice(i, 0, ...corners);
+        changed = true;
+        break;
+      }
+      if (!changed) break;
+    }
+    routes.push(points);
+  }
+  return routes;
+}
+
+function firstHit(a: Pt, b: Pt, boxes: RouteBox[], source: string, target: string): RouteBox | null {
+  let nearest: { box: RouteBox; t: number } | null = null;
+  for (const box of boxes) {
+    if (box.id === source || box.id === target) continue;
+    const t = segmentBoxEntry(a, b, box, 8);
+    if (t === null || (nearest && t >= nearest.t)) continue;
+    nearest = { box, t };
+  }
+  return nearest?.box ?? null;
+}
+
+function cornersToward(a: Pt, b: Pt, box: RouteBox, bias: number): Pt[] {
+  const pad = 10;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  // Use both corners of a side. A single diagonal corner can cut back through a
+  // wide note, whereas the pair creates a safe channel around its full edge.
+  const side = Math.sign(dx * (box.y - a.y) - dy * (box.x - a.x)) || bias;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const y = box.y + (side > 0 ? box.h / 2 + pad : -box.h / 2 - pad);
+    return dx >= 0 ? [{ x: box.x - box.w / 2 - pad, y }, { x: box.x + box.w / 2 + pad, y }]
+      : [{ x: box.x + box.w / 2 + pad, y }, { x: box.x - box.w / 2 - pad, y }];
+  }
+  const x = box.x + (side > 0 ? box.w / 2 + pad : -box.w / 2 - pad);
+  return dy >= 0 ? [{ x, y: box.y - box.h / 2 - pad }, { x, y: box.y + box.h / 2 + pad }]
+    : [{ x, y: box.y + box.h / 2 + pad }, { x, y: box.y - box.h / 2 - pad }];
+}
+
+function segmentBoxEntry(a: Pt, b: Pt, box: RouteBox, pad: number): number | null {
+  const hx = box.w / 2 + pad, hy = box.h / 2 + pad;
+  let lo = 0, hi = 1;
+  for (const [p, d, min, max] of [[a.x, b.x - a.x, box.x - hx, box.x + hx], [a.y, b.y - a.y, box.y - hy, box.y + hy]] as const) {
+    if (Math.abs(d) < 1e-9) { if (p < min || p > max) return null; continue; }
+    let x = (min - p) / d, y = (max - p) / d;
+    if (x > y) [x, y] = [y, x];
+    lo = Math.max(lo, x); hi = Math.min(hi, y);
+    if (lo > hi) return null;
+  }
+  return lo;
 }
 
 export function sampleCubic(a: Pt, c1: Pt, c2: Pt, b: Pt, count = SAMPLE_COUNT): Pt[] {

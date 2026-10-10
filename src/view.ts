@@ -75,6 +75,7 @@ export class MindAtlasView extends ItemView {
   private refreshTimer: number | null = null;
   private renderToken = 0;
   private editor: NoteEditor | null = null;
+  private editorLeaf: WorkspaceLeaf | null = null;
   private mapEl!: HTMLElement;
   private editorPane!: HTMLElement;
   private editorTitle!: HTMLInputElement;
@@ -514,7 +515,10 @@ export class MindAtlasView extends ItemView {
     const title = this.graph?.nodes.find((n) => n.file.path === file.path)?.title ?? file.basename;
     this.editorTitle.value = title;
     if (this.plugin.settings.editorPosition === "pane") {
-      void this.app.workspace.getLeaf("split", "vertical").openFile(file);
+      // Reuse one ordinary Markdown leaf so every subsequent node click simply
+      // replaces its content instead of creating an ever-growing row of tabs.
+      const leaf = this.editorLeaf ?? (this.editorLeaf = this.app.workspace.getLeaf("split", "vertical"));
+      void leaf.openFile(file);
     } else void this.editor?.open(file);
   }
 
@@ -1084,16 +1088,16 @@ export class MindAtlasView extends ItemView {
         const route = routed.get(this.edgeEls[i].key);
         // The router tries the straight segment first; only bend when it must
         // avoid a note or an already-routed line.
-        const c = route?.control ?? { x: (a.p.x + b.p.x) / 2, y: (a.p.y + b.p.y) / 2 };
-        const d = `M${a.p.x},${a.p.y} Q${c.x},${c.y} ${b.p.x},${b.p.y}`;
+        const points = route?.points ?? [a.p, b.p];
+        const d = `M${points.map((p) => `${p.x},${p.y}`).join(" L")}`;
         el.setAttribute("d", d);
         this.edgeEls[i].hit.setAttribute("d", d);
         const unit = (from: Pt, to: Pt) => {
           const l = Math.hypot(to.x - from.x, to.y - from.y) || 1;
           return { x: (to.x - from.x) / l, y: (to.y - from.y) / l };
         };
-        heads[0].setAttribute("d", edge.back ? arrowHead(a.p, unit(c, a.p), 8) : "");
-        heads[1].setAttribute("d", edge.fwd ? arrowHead(b.p, unit(c, b.p), 8) : "");
+        heads[0].setAttribute("d", edge.back ? arrowHead(a.p, unit(points[1] ?? b.p, a.p), 8) : "");
+        heads[1].setAttribute("d", edge.fwd ? arrowHead(b.p, unit(points[points.length - 2] ?? a.p, b.p), 8) : "");
         return;
       }
       // Structural lines use the same obstacle-aware router as connections.
@@ -1103,7 +1107,7 @@ export class MindAtlasView extends ItemView {
       const sz: [number, number] = [this.fontOf(edge.from).px / 18, this.fontOf(edge.to).px / 18];
       el.setAttribute(
         "d",
-        structural ? `M${a.p.x},${a.p.y} Q${structural.control.x},${structural.control.y} ${b.p.x},${b.p.y}`
+        structural ? `M${structural.points.map((p) => `${p.x},${p.y}`).join(" L")}`
           : fromThick ? this.linePath(a, b, style, k, sz) : this.linePath(b, a, style, k, [sz[1], sz[0]])
       );
       this.edgeEls[i].hit.setAttribute(
