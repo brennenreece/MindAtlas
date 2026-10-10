@@ -1059,7 +1059,9 @@ export class MindAtlasView extends ItemView {
     const occupied: { source: string; target: string; points: Pt[] }[] = [];
     const links = routeCrossLinks
       ? this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
-          if (cross && el.hasClass("is-hidden")) return [];
+          // Connections are the only overlay lines. Tree edges are laid out and
+          // rendered directly inside their own branch territory.
+          if (!cross || el.hasClass("is-hidden")) return [];
           const [a, b] = anchors[i];
           return [{
             key,
@@ -1067,9 +1069,9 @@ export class MindAtlasView extends ItemView {
             target: edge.to.file.path,
             start: a.p,
             end: b.p,
-            strict: !cross,
+            strict: false,
           }];
-        }).sort((a, b) => Number(b.strict) - Number(a.strict) || a.key.localeCompare(b.key))
+        })
       : [];
     const routed = findCrossLinkRoutes(
       links,
@@ -1095,21 +1097,17 @@ export class MindAtlasView extends ItemView {
         heads[1].setAttribute("d", edge.fwd ? arrowHead(b.p, unit(points[points.length - 2] ?? a.p, b.p), 8) : "");
         return;
       }
-      // Structural lines use the same obstacle-aware router as connections.
-      // Unlike connections, they are never allowed to cross earlier lines.
-      const structural = routed.get(this.edgeEls[i].key);
-      const structuralPoints = structural?.points ?? [a.p, b.p];
+      // Child lines do not use the connection router. Their branch territory is
+      // reserved by layout, so a compact rounded elbow is predictable and legible.
+      const structuralPoints = childElbowPoints(a.p, b.p);
+      const structuralPath = roundedRoutePath(structuralPoints, 10);
       const fromThick = !(edge.back && !edge.fwd);
       const sz: [number, number] = [this.fontOf(edge.from).px / 18, this.fontOf(edge.to).px / 18];
       el.setAttribute(
         "d",
-        structural ? roundedRoutePath(structuralPoints)
-          : fromThick ? this.linePath(a, b, style, k, sz) : this.linePath(b, a, style, k, [sz[1], sz[0]])
+        structuralPath
       );
-      this.edgeEls[i].hit.setAttribute(
-        "d",
-        this.linePath(a, b, style === "organic" ? "curved" : style, k)
-      );
+      this.edgeEls[i].hit.setAttribute("d", structuralPath);
 
       // Arrowheads point into the node that is linked to; mutual links get both.
       const size = 7 + s.lineWidth * 2 * k;
@@ -1124,11 +1122,10 @@ export class MindAtlasView extends ItemView {
           return;
         }
         let dir: Pt;
-        if (structural) {
-          dir = routeUnit(
-            idx === 0 ? structuralPoints[1] ?? b.p : structuralPoints[structuralPoints.length - 2] ?? a.p,
-            idx === 0 ? a.p : b.p
-          );
+        if (idx === 0) {
+          dir = routeUnit(structuralPoints[1] ?? b.p, a.p);
+        } else if (idx === 1) {
+          dir = routeUnit(structuralPoints[structuralPoints.length - 2] ?? a.p, b.p);
         } else if (style === "straight") {
           const len = Math.hypot(end.p.x - other.p.x, end.p.y - other.p.y) || 1;
           dir = { x: (end.p.x - other.p.x) / len, y: (end.p.y - other.p.y) / len };
@@ -2548,9 +2545,8 @@ function arrowHead(tip: Pt, dir: Pt, size: number): string {
 }
 
 /** Convert obstacle-routing waypoints into a visually smooth, rounded path. */
-function roundedRoutePath(points: Pt[]) {
+function roundedRoutePath(points: Pt[], radius = 12) {
   if (points.length < 3) return `M${points[0].x},${points[0].y} L${points[points.length - 1].x},${points[points.length - 1].y}`;
-  const radius = 12;
   let d = `M${points[0].x},${points[0].y}`;
   for (let i = 1; i < points.length - 1; i++) {
     const prev = points[i - 1], corner = points[i], next = points[i + 1];
@@ -2563,6 +2559,19 @@ function roundedRoutePath(points: Pt[]) {
   }
   const end = points[points.length - 1];
   return `${d} L${end.x},${end.y}`;
+}
+
+/** A simple parent-to-child trunk path: two bends at most, always rounded. */
+function childElbowPoints(from: Pt, to: Pt): Pt[] {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  // Near-straight branches should stay straight rather than invent a detour.
+  if (Math.abs(dx) < 18 || Math.abs(dy) < 18) return [from, to];
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const midX = from.x + dx * 0.55;
+    return [from, { x: midX, y: from.y }, { x: midX, y: to.y }, to];
+  }
+  const midY = from.y + dy * 0.55;
+  return [from, { x: from.x, y: midY }, { x: to.x, y: midY }, to];
 }
 
 function routeUnit(from: Pt, to: Pt): Pt {
