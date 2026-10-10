@@ -1139,13 +1139,16 @@ export class MindAtlasView extends ItemView {
     );
     this.edgeEls.forEach(({ edge, el, cross, heads }, i) => {
       // Cross-links are never ribbons; they stay dashed strokes.
-      const style = cross && s.lineStyle === "organic" ? "curved" : s.lineStyle;
+    const style = cross ? "curved" : s.lineStyle;
       const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
       const [a, b] = anchors[i];
       if (cross) {
         const route = routed.get(this.edgeEls[i].key);
         const points = route?.points ?? [a.p, b.p];
-        const d = roundedRoutePath(points);
+        // Secondary relationships use the same smooth visual language as the
+        // primary hierarchy. Waypoints only steer the curve around obstacles;
+        // they are not exposed as harsh elbow corners.
+        const d = smoothRoutePath(points);
         el.setAttribute("d", d);
         this.edgeEls[i].hit.setAttribute("d", d);
         const unit = (from: Pt, to: Pt) => {
@@ -2614,6 +2617,31 @@ function roundedRoutePath(points: Pt[], radius = 12) {
   }
   const end = points[points.length - 1];
   return `${d} L${end.x},${end.y}`;
+}
+
+/** Smooth a routed polyline into a sequence of cubic Bézier segments. */
+function smoothRoutePath(points: Pt[]): string {
+  if (points.length < 2) return "";
+  if (points.length === 2) {
+    const a = points[0], b = points[1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const bend = Math.max(18, Math.min(90, Math.hypot(dx, dy) * 0.28));
+    const horizontal = Math.abs(dx) >= Math.abs(dy);
+    const c1 = horizontal ? { x: a.x + Math.sign(dx || 1) * bend, y: a.y } : { x: a.x, y: a.y + Math.sign(dy || 1) * bend };
+    const c2 = horizontal ? { x: b.x - Math.sign(dx || 1) * bend, y: b.y } : { x: b.x, y: b.y - Math.sign(dy || 1) * bend };
+    return `M${a.x},${a.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${b.x},${b.y}`;
+  }
+  let d = `M${points[0].x},${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const prev = points[i - 1] ?? points[i];
+    const from = points[i];
+    const to = points[i + 1];
+    const next = points[i + 2] ?? to;
+    const c1 = { x: from.x + (to.x - prev.x) / 6, y: from.y + (to.y - prev.y) / 6 };
+    const c2 = { x: to.x - (next.x - from.x) / 6, y: to.y - (next.y - from.y) / 6 };
+    d += ` C${c1.x},${c1.y} ${c2.x},${c2.y} ${to.x},${to.y}`;
+  }
+  return d;
 }
 
 function structuralPathFor(version: string, a: Anchor, b: Anchor): string {
