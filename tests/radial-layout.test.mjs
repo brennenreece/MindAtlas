@@ -15,7 +15,7 @@ const load = async (name) => {
 };
 
 const { arrange, RADIAL_PRESETS } = await load("arrange");
-const { cubicControls, radialBoundaryAnchor, routeCrossLinks, sampleCubic } = await load("radial-routing");
+const { cubicControls, radialBoundaryAnchor, routeBranchSplines, routeCrossLinks, sampleCubic } = await load("radial-routing");
 
 function node(path, w = 90, h = 30, side = 1) {
   return { file: { path }, w, h, side, bx: 0, by: 0 };
@@ -211,6 +211,27 @@ test("cross-link routing bends around nodes and existing connectors", () => {
   assert.ok(route);
   assert.ok(route.points.every((p) => Math.abs(p.x) > 34 || Math.abs(p.y) > 42));
   assert.ok(route.control.y < 0 || route.control.y > 0);
+});
+
+test("structural branches remain smooth while routing around a note", () => {
+  const boxes = [
+    { id: "parent", x: -150, y: 0, w: 80, h: 36 },
+    { id: "child", x: 150, y: 0, w: 80, h: 36 },
+    { id: "title", x: 0, y: 0, w: 86, h: 56 },
+  ];
+  const route = routeBranchSplines([{
+    key: "branch",
+    source: "parent",
+    target: "child",
+    start: radialBoundaryAnchor(boxes[0], boxes[1]),
+    end: radialBoundaryAnchor(boxes[1], boxes[0]),
+  }], boxes).get("branch");
+
+  assert.ok(route);
+  assert.equal(route.points.some((p, i) => i > 0 && segmentHitsBox(route.points[i - 1], p, boxes[2])), false);
+  const [, c1, c2] = route.controls;
+  assert.notEqual(c1.y, 0, "the route should gracefully sweep around the title");
+  assert.notEqual(c2.y, 0, "the route should gracefully sweep around the title");
 });
 
 test("cross-link routing chooses the side that clears an existing edge", () => {

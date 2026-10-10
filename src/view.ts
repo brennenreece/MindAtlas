@@ -12,8 +12,8 @@ import { buildGraph, Edge, MapGraph, MapNode } from "./tree";
 import {
   cubicControls as computeCubicControls,
   radialBoundaryAnchor,
+  routeBranchSplines,
   routeCrossLinks as findCrossLinkRoutes,
-  sampleCubic,
 } from "./radial-routing";
 
 export const VIEW_TYPE_MINDATLAS = "mind-atlas-view";
@@ -1056,7 +1056,18 @@ export class MindAtlasView extends ItemView {
     this.positionMenu();
     this.positionInline();
     this.updatePreview();
-    const occupied: { source: string; target: string; points: Pt[] }[] = [];
+    const boxes = this.graph?.nodes.map((n) => ({ id: n.file.path, x: n.x, y: n.y, w: n.w, h: n.h })) ?? [];
+    const branchInputs = this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
+      if (cross || el.hasClass("is-hidden")) return [];
+      const [start, end] = anchors[i];
+      return [{ key, source: edge.from.file.path, target: edge.to.file.path, start, end }];
+    });
+    const branches = routeBranchSplines(branchInputs, boxes);
+    // Relationship links yield to the structural map, including its curves.
+    const occupied = branchInputs.flatMap((branch) => {
+      const route = branches.get(branch.key);
+      return route ? [{ source: branch.source, target: branch.target, points: route.points }] : [];
+    });
     const links = routeCrossLinks
       ? this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
           // Connections are the only overlay lines. Tree edges are laid out and
@@ -1075,7 +1086,7 @@ export class MindAtlasView extends ItemView {
       : [];
     const routed = findCrossLinkRoutes(
       links,
-      this.graph?.nodes.map((n) => ({ id: n.file.path, x: n.x, y: n.y, w: n.w, h: n.h })) ?? [],
+      boxes,
       occupied
     );
     this.edgeEls.forEach(({ edge, el, cross, heads }, i) => {
@@ -1097,12 +1108,13 @@ export class MindAtlasView extends ItemView {
         heads[1].setAttribute("d", edge.fwd ? arrowHead(b.p, unit(points[points.length - 2] ?? a.p, b.p), 8) : "");
         return;
       }
-      // Child lines do not use the connection router. Their branch territory is
-      // reserved by layout, so a compact rounded elbow is predictable and legible.
-      const structuralPoints = childElbowPoints(a.p, b.p);
-      const structuralPath = roundedRoutePath(structuralPoints, 10);
-      const fromThick = !(edge.back && !edge.fwd);
+      const branch = branches.get(this.edgeEls[i].key);
+      const controls = branch?.controls ?? [a.p, a.p, b.p, b.p];
+      const [p1, c1, c2, p2] = controls;
       const sz: [number, number] = [this.fontOf(edge.from).px / 18, this.fontOf(edge.to).px / 18];
+      const structuralPath = s.lineStyle === "organic"
+        ? cubicRibbonPath(controls, s.lineWidth, k, sz)
+        : `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
       el.setAttribute(
         "d",
         structuralPath
@@ -1123,9 +1135,9 @@ export class MindAtlasView extends ItemView {
         }
         let dir: Pt;
         if (idx === 0) {
-          dir = routeUnit(structuralPoints[1] ?? b.p, a.p);
+          dir = routeUnit(c1, a.p);
         } else if (idx === 1) {
-          dir = routeUnit(structuralPoints[structuralPoints.length - 2] ?? a.p, b.p);
+          dir = routeUnit(c2, b.p);
         } else if (style === "straight") {
           const len = Math.hypot(end.p.x - other.p.x, end.p.y - other.p.y) || 1;
           dir = { x: (end.p.x - other.p.x) / len, y: (end.p.y - other.p.y) / len };
@@ -2561,17 +2573,27 @@ function roundedRoutePath(points: Pt[], radius = 12) {
   return `${d} L${end.x},${end.y}`;
 }
 
-/** A simple parent-to-child trunk path: two bends at most, always rounded. */
-function childElbowPoints(from: Pt, to: Pt): Pt[] {
-  const dx = to.x - from.x, dy = to.y - from.y;
-  // Near-straight branches should stay straight rather than invent a detour.
-  if (Math.abs(dx) < 18 || Math.abs(dy) < 18) return [from, to];
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    const midX = from.x + dx * 0.55;
-    return [from, { x: midX, y: from.y }, { x: midX, y: to.y }, to];
+/** A tapered version of a cubic branch for the optional organic theme. */
+function cubicRibbonPath([p1, c1, c2, p2]: [Pt, Pt, Pt, Pt], lineWidth: number, widthK: number, sizeK: [number, number]): string {
+  const w0 = (lineWidth * 2.6 * widthK * sizeK[0]) / 2;
+  const w1 = (lineWidth * 0.5 * widthK * Math.min(sizeK[0], sizeK[1])) / 2;
+  const left: Pt[] = [];
+  const right: Pt[] = [];
+  for (let i = 0; i <= 20; i++) {
+    const t = i / 20;
+    const u = 1 - t;
+    const x = u * u * u * p1.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p2.x;
+    const y = u * u * u * p1.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p2.y;
+    let tx = 3 * u * u * (c1.x - p1.x) + 6 * u * t * (c2.x - c1.x) + 3 * t * t * (p2.x - c2.x);
+    let ty = 3 * u * u * (c1.y - p1.y) + 6 * u * t * (c2.y - c1.y) + 3 * t * t * (p2.y - c2.y);
+    const len = Math.hypot(tx, ty) || 1;
+    tx /= len;
+    ty /= len;
+    const halfWidth = w0 + (w1 - w0) * (1 - Math.pow(1 - t, 1.5));
+    left.push({ x: x - ty * halfWidth, y: y + tx * halfWidth });
+    right.push({ x: x + ty * halfWidth, y: y - tx * halfWidth });
   }
-  const midY = from.y + dy * 0.55;
-  return [from, { x: from.x, y: midY }, { x: to.x, y: midY }, to];
+  return "M" + [...left, ...right.reverse()].map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" L") + " Z";
 }
 
 function routeUnit(from: Pt, to: Pt): Pt {

@@ -30,6 +30,21 @@ export interface CrossLinkRoute {
   points: Pt[];
 }
 
+/** A structural branch is always represented as one continuous cubic sweep. */
+export interface BranchSplineInput {
+  key: string;
+  source: string;
+  target: string;
+  start: RouteAnchor;
+  end: RouteAnchor;
+}
+
+export interface BranchSplineRoute {
+  controls: [Pt, Pt, Pt, Pt];
+  /** A dense representation used only for collision checks and subsequent routes. */
+  points: Pt[];
+}
+
 const SAMPLE_COUNT = 10;
 
 interface Bounds {
@@ -89,6 +104,73 @@ export function routeCrossLinks(
   }
 
   return routes;
+}
+
+/**
+ * Route the visible parent/child structure as the kind of low-tension Bézier
+ * branches used by mind maps.  Unlike relationship links these are never
+ * turned into elbows: candidates only change their gentle sweep.  A branch is
+ * considered clear only when it clears note boxes and earlier branches (apart
+ * from a shared endpoint).
+ */
+export function routeBranchSplines(
+  branches: BranchSplineInput[],
+  boxes: RouteBox[]
+): Map<string, BranchSplineRoute> {
+  const routes = new Map<string, BranchSplineRoute>();
+  const occupied: IndexedLine[] = [];
+
+  for (const branch of branches) {
+    const candidates = branchCandidates(branch);
+    let best: BranchSplineRoute | null = null;
+    let bestCost = Infinity;
+    for (const controls of candidates) {
+      const points = sampleCubic(...controls, 28);
+      const bounds = boundsOf(points);
+      const boxHits = boxCollisions(points, bounds, boxes, branch.source, branch.target);
+      const lineHits = lineConflicts(points, bounds, occupied, branch.source, branch.target);
+      // Avoiding a label/note is absolute.  Crossing another branch is nearly
+      // as expensive; length and bend only decide between equally clear paths.
+      const cost = boxHits * 1_000_000_000 + lineHits * 1_000_000 + routeLength(points);
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = { controls, points };
+      }
+    }
+    if (best) {
+      routes.set(branch.key, best);
+      occupied.push(indexLine({ source: branch.source, target: branch.target, points: best.points }));
+    }
+  }
+  return routes;
+}
+
+function branchCandidates(branch: BranchSplineInput): [Pt, Pt, Pt, Pt][] {
+  const p1 = branch.start.p;
+  const p2 = branch.end.p;
+  const distance = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+  // Short handles prevent the inflated, looping curves that made the previous
+  // version feel dramatic.  Longer branches still get enough room to breathe.
+  const handle = Math.max(24, Math.min(92, distance * 0.38));
+  const normal = { x: -(p2.y - p1.y) / distance, y: (p2.x - p1.x) / distance };
+  const amounts = [0, 0.22, -0.22, 0.48, -0.48, 0.82, -0.82, 1.22, -1.22, 1.7, -1.7, 2.4, -2.4, 3.2, -3.2];
+  return amounts.map((amount) => {
+    const d1 = blendDirection(branch.start.dir, normal, amount);
+    const d2 = blendDirection(branch.end.dir, normal, amount);
+    return [
+      p1,
+      { x: p1.x + d1.x * handle, y: p1.y + d1.y * handle },
+      { x: p2.x + d2.x * handle, y: p2.y + d2.y * handle },
+      p2,
+    ];
+  });
+}
+
+function blendDirection(direction: Pt, normal: Pt, amount: number): Pt {
+  const x = direction.x + normal.x * amount;
+  const y = direction.y + normal.y * amount;
+  const length = Math.hypot(x, y) || 1;
+  return { x: x / length, y: y / length };
 }
 
 function legacyCandidates(link: CrossLinkInput): Pt[][] {
