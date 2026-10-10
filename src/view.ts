@@ -12,7 +12,7 @@ import { buildGraph, Edge, MapGraph, MapNode } from "./tree";
 import {
   cubicControls as computeCubicControls,
   radialBoundaryAnchor,
-  routeBranchSplines,
+  routeStructuralBranches,
   routeCrossLinks as findCrossLinkRoutes,
 } from "./radial-routing";
 
@@ -948,9 +948,11 @@ export class MindAtlasView extends ItemView {
       end: 0 | 1;
     }
     const ends: End[] = [];
-    const radial = this.plugin.settings.layoutMode === "radial";
     this.edgeEls.forEach(({ edge, cross }, i) => {
-      if (cross || radial) return;
+      // Structural and relationship lines share the same boundary allocator.
+      // That means every child gets its own ordered lane on the parent box,
+      // rather than many branches leaving through one visual point.
+      if (cross) return;
       const [sa, sb] = this.sidesFor(edge.from, edge.to);
       ends.push({ node: edge.from, other: edge.to, side: sa, entry: i, end: 0 });
       ends.push({ node: edge.to, other: edge.from, side: sb, entry: i, end: 1 });
@@ -976,7 +978,7 @@ export class MindAtlasView extends ItemView {
     }
 
     const out: Anchor[][] = this.edgeEls.map(({ edge, cross }) =>
-      cross || radial
+      cross
         ? [this.boundaryAnchor(edge.from, edge.to), this.boundaryAnchor(edge.to, edge.from)]
         : [
             { p: { x: 0, y: 0 }, dir: SIDE_DIR.R },
@@ -991,7 +993,7 @@ export class MindAtlasView extends ItemView {
       );
       const n = list.length;
       const span = (vertical ? node.h : node.w) * 0.8;
-      const step = n === 1 ? 0 : Math.min(span / (n - 1), vertical ? 10 : 16);
+      const step = n === 1 ? 0 : Math.min(span / (n - 1), vertical ? 11 : 16);
       list.forEach((e, k) => {
         const off = (k - (n - 1) / 2) * step;
         const p = vertical
@@ -1062,7 +1064,7 @@ export class MindAtlasView extends ItemView {
       const [start, end] = anchors[i];
       return [{ key, source: edge.from.file.path, target: edge.to.file.path, start, end }];
     });
-    const branches = routeBranchSplines(branchInputs, boxes);
+    const branches = routeStructuralBranches(branchInputs, boxes);
     // Relationship links yield to the structural map, including its curves.
     const occupied = branchInputs.flatMap((branch) => {
       const route = branches.get(branch.key);

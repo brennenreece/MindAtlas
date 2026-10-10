@@ -30,8 +30,8 @@ export interface CrossLinkRoute {
   points: Pt[];
 }
 
-/** A structural branch is always represented as one continuous cubic sweep. */
-export interface BranchSplineInput {
+/** An ordered parent/child branch with reserved boundary lanes at both ends. */
+export interface StructuralBranchInput {
   key: string;
   source: string;
   target: string;
@@ -39,7 +39,7 @@ export interface BranchSplineInput {
   end: RouteAnchor;
 }
 
-export interface BranchSplineRoute {
+export interface StructuralBranchRoute {
   controls: [Pt, Pt, Pt, Pt];
   /** A dense representation used only for collision checks and subsequent routes. */
   points: Pt[];
@@ -107,31 +107,32 @@ export function routeCrossLinks(
 }
 
 /**
- * Route the visible parent/child structure as the kind of low-tension Bézier
- * branches used by mind maps.  Unlike relationship links these are never
- * turned into elbows: candidates only change their gentle sweep.  A branch is
- * considered clear only when it clears note boxes and earlier branches (apart
- * from a shared endpoint).
+ * The structural map is intentionally not a general-purpose path router.
+ * Layout has already assigned every branch a territory and each parent has
+ * given its children a separate boundary lane.  Here we select the smallest
+ * single Bézier sweep that stays clear of protected note/title boxes and of
+ * earlier branch corridors.  If the unbent sweep is clear it always wins.
  */
-export function routeBranchSplines(
-  branches: BranchSplineInput[],
+export function routeStructuralBranches(
+  branches: StructuralBranchInput[],
   boxes: RouteBox[]
-): Map<string, BranchSplineRoute> {
-  const routes = new Map<string, BranchSplineRoute>();
+): Map<string, StructuralBranchRoute> {
+  const routes = new Map<string, StructuralBranchRoute>();
   const occupied: IndexedLine[] = [];
 
   for (const branch of branches) {
-    const candidates = branchCandidates(branch);
-    let best: BranchSplineRoute | null = null;
+    let best: StructuralBranchRoute | null = null;
     let bestCost = Infinity;
-    for (const controls of candidates) {
+    for (const controls of structuralCandidates(branch)) {
       const points = sampleCubic(...controls, 28);
       const bounds = boundsOf(points);
       const boxHits = boxCollisions(points, bounds, boxes, branch.source, branch.target);
       const lineHits = lineConflicts(points, bounds, occupied, branch.source, branch.target);
-      // Avoiding a label/note is absolute.  Crossing another branch is nearly
-      // as expensive; length and bend only decide between equally clear paths.
-      const cost = boxHits * 1_000_000_000 + lineHits * 1_000_000 + routeLength(points);
+      const bend = Math.abs(controls[1].x - branch.start.p.x) + Math.abs(controls[1].y - branch.start.p.y) +
+        Math.abs(controls[2].x - branch.end.p.x) + Math.abs(controls[2].y - branch.end.p.y);
+      // Notes and titles are inviolable. Structural branches also do not cross
+      // each other: the length/bend preference is only a tie breaker.
+      const cost = boxHits * 1_000_000_000 + lineHits * 1_000_000 + routeLength(points) + bend * 0.01;
       if (cost < bestCost) {
         bestCost = cost;
         best = { controls, points };
@@ -145,32 +146,34 @@ export function routeBranchSplines(
   return routes;
 }
 
-function branchCandidates(branch: BranchSplineInput): [Pt, Pt, Pt, Pt][] {
+function structuralCandidates(branch: StructuralBranchInput): [Pt, Pt, Pt, Pt][] {
   const p1 = branch.start.p;
   const p2 = branch.end.p;
   const distance = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
-  // Short handles prevent the inflated, looping curves that made the previous
-  // version feel dramatic.  Longer branches still get enough room to breathe.
-  const handle = Math.max(24, Math.min(92, distance * 0.38));
+  const direct = { x: (p2.x - p1.x) / distance, y: (p2.y - p1.y) / distance };
+  // A genuinely aligned branch offers a straight mind-map stroke first.  It
+  // remains a candidate rather than an unconditional answer: a title or note
+  // between its ends must still be protected.
+  const aligned = dot(branch.start.dir, direct) > 0.985 && dot(branch.end.dir, direct) < -0.985;
+  // Keep the visible bend restrained. It is enough to make a graceful turn,
+  // but cannot produce the theatrical loops of the old router.
+  const handle = Math.max(20, Math.min(76, distance * 0.32));
   const normal = { x: -(p2.y - p1.y) / distance, y: (p2.x - p1.x) / distance };
-  const amounts = [0, 0.22, -0.22, 0.48, -0.48, 0.82, -0.82, 1.22, -1.22, 1.7, -1.7, 2.4, -2.4, 3.2, -3.2];
-  return amounts.map((amount) => {
-    const d1 = blendDirection(branch.start.dir, normal, amount);
-    const d2 = blendDirection(branch.end.dir, normal, amount);
+  const bends = [0, 10, -10, 22, -22, 38, -38, 56, -56, 78, -78];
+  const candidates: [Pt, Pt, Pt, Pt][] = bends.map((bend): [Pt, Pt, Pt, Pt] => {
     return [
       p1,
-      { x: p1.x + d1.x * handle, y: p1.y + d1.y * handle },
-      { x: p2.x + d2.x * handle, y: p2.y + d2.y * handle },
+      { x: p1.x + branch.start.dir.x * handle + normal.x * bend, y: p1.y + branch.start.dir.y * handle + normal.y * bend },
+      { x: p2.x + branch.end.dir.x * handle + normal.x * bend, y: p2.y + branch.end.dir.y * handle + normal.y * bend },
       p2,
     ];
   });
+  const straight: [Pt, Pt, Pt, Pt] = [p1, p1, p2, p2];
+  return aligned ? [straight, ...candidates] : candidates;
 }
 
-function blendDirection(direction: Pt, normal: Pt, amount: number): Pt {
-  const x = direction.x + normal.x * amount;
-  const y = direction.y + normal.y * amount;
-  const length = Math.hypot(x, y) || 1;
-  return { x: x / length, y: y / length };
+function dot(a: Pt, b: Pt) {
+  return a.x * b.x + a.y * b.y;
 }
 
 function legacyCandidates(link: CrossLinkInput): Pt[][] {
