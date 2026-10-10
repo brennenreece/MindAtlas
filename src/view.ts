@@ -102,6 +102,7 @@ export class MindAtlasView extends ItemView {
   private menuCenterBtn!: HTMLElement;
   private openIconPalette: () => void = () => {};
   private layoutBtn!: HTMLButtonElement;
+  private forceBtn!: HTMLButtonElement;
   private undo = new UndoStack(this.app, () => this.scheduleRefresh());
   private nodeEls = new Map<MapNode, SVGGElement>();
   private edgeEls: {
@@ -417,6 +418,8 @@ export class MindAtlasView extends ItemView {
       s.layoutMode = s.layoutMode === "radial" ? "tree" : "radial";
       void this.plugin.saveSettings();
     };
+    this.forceBtn = bar.createEl("button", { attr: { title: "Adjust repel and gravity for the radial force layout" } });
+    this.forceBtn.onclick = () => this.cycleForcePreset();
 
     minus.onclick = () => this.setDepth(this.depth - 1);
     plus.onclick = () => this.setDepth(this.depth + 1);
@@ -425,6 +428,21 @@ export class MindAtlasView extends ItemView {
       void this.render(true);
     };
     this.syncToolbar();
+  }
+
+  private cycleForcePreset() {
+    const s = this.plugin.settings;
+    const presets = ["compact", "balanced", "spacious"] as const;
+    const current = presets.findIndex((name) =>
+      s.radialTuning.repel === ({ compact: 10, balanced: 25, spacious: 40 }[name]) &&
+      s.radialTuning.gravity === ({ compact: 80, balanced: 60, spacious: 40 }[name])
+    );
+    const next = presets[(current + 1 + presets.length) % presets.length];
+    const values = { compact: { repel: 10, gravity: 80 }, balanced: { repel: 25, gravity: 60 }, spacious: { repel: 40, gravity: 40 } }[next];
+    s.radialTuning.repel = values.repel;
+    s.radialTuning.gravity = values.gravity;
+    void this.plugin.saveSettings();
+    void this.render(true);
   }
 
   private buildGettingStarted() {
@@ -482,6 +500,11 @@ export class MindAtlasView extends ItemView {
     if (this.depthLabel) this.depthLabel.setText(String(this.depth));
     if (this.backlinkBox) this.backlinkBox.checked = this.backlinks;
     this.layoutBtn?.setText(this.plugin.settings.layoutMode === "radial" ? "Radial" : "Tree");
+    if (this.forceBtn) {
+      const t = this.plugin.settings.radialTuning;
+      const name = t.repel <= 15 && t.gravity >= 70 ? "Tight" : t.repel >= 35 && t.gravity <= 50 ? "Loose" : "Balanced";
+      this.forceBtn.setText(`Force: ${name}`);
+    }
     if (this.boxBox) this.boxBox.checked = this.plugin.settings.showBoxes;
     if (this.editorBox) this.editorBox.checked = !this.editorHidden;
     this.contentEl.toggleClass("is-editor-hidden", this.editorHidden);
@@ -947,11 +970,12 @@ export class MindAtlasView extends ItemView {
       end: 0 | 1;
     }
     const ends: End[] = [];
+    const radial = this.plugin.settings.layoutMode === "radial";
     this.edgeEls.forEach(({ edge, cross }, i) => {
       // Structural and relationship lines share the same boundary allocator.
       // That means every child gets its own ordered lane on the parent box,
       // rather than many branches leaving through one visual point.
-      if (cross) return;
+      if (cross || radial) return;
       const [sa, sb] = this.sidesFor(edge.from, edge.to);
       ends.push({ node: edge.from, other: edge.to, side: sa, entry: i, end: 0 });
       ends.push({ node: edge.to, other: edge.from, side: sb, entry: i, end: 1 });
@@ -977,7 +1001,7 @@ export class MindAtlasView extends ItemView {
     }
 
     const out: Anchor[][] = this.edgeEls.map(({ edge, cross }) =>
-      cross
+      cross || radial
         ? [this.boundaryAnchor(edge.from, edge.to), this.boundaryAnchor(edge.to, edge.from)]
         : [
             { p: { x: 0, y: 0 }, dir: SIDE_DIR.R },
