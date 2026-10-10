@@ -1,4 +1,5 @@
 import type { Edge, MapNode } from "./tree";
+import { arrangeHierarchical } from "./hierarchical-layout";
 
 export type LayoutMode = "radial" | "tree";
 
@@ -44,7 +45,7 @@ export function arrange(root: MapNode, edges: Edge[], mode: LayoutMode, spacing:
   const kids = childMap(edges);
   root.bx = 0;
   root.by = 0;
-  if (mode === "tree") arrangeTree(root, kids, spacing);
+  if (mode === "tree") arrangeHierarchical(root, edges, spacing);
   else arrangeRadial(root, kids, Math.min(spacing, tuning.linkDistance), crossLinks, tuning);
 }
 
