@@ -1,4 +1,4 @@
-import { ItemView, Menu, Notice, Platform, TFile, WorkspaceLeaf } from "obsidian";
+import { App, ItemView, Menu, Modal, Notice, Platform, Setting, TFile, WorkspaceLeaf } from "obsidian";
 import type MindAtlasPlugin from "./main";
 import { fi, iconCategories, iconSvg, resolveIcon, setFeather as setIcon } from "./icons";
 import { NoteEditor } from "./editor";
@@ -36,6 +36,7 @@ interface ViewState extends Record<string, unknown> {
   backlinks?: boolean;
   extras?: string[];
   collapsed?: string[];
+  expanded?: string[];
   editorHidden?: boolean;
   debug?: boolean;
 }
@@ -80,6 +81,9 @@ export class MindAtlasView extends ItemView {
     return this.layouts.free;
   }
   private collapsed = new Set<string>();
+  private expanded = new Set<string>();
+  private focusMode = false;
+  private focusBox!: HTMLInputElement;
   private animFrame: number | null = null;
   private dragging: MapNode | null = null;
   private menuCenterBtn!: HTMLElement;
@@ -152,6 +156,9 @@ export class MindAtlasView extends ItemView {
     if (Array.isArray(state?.extras)) {
       this.extras = state.extras.filter((x): x is string => typeof x === "string");
     }
+    if (Array.isArray(state?.expanded)) {
+      this.expanded = new Set(state.expanded.filter((x): x is string => typeof x === "string"));
+    }
     if (Array.isArray(state?.collapsed)) {
       this.collapsed = new Set(state.collapsed.filter((x): x is string => typeof x === "string"));
     }
@@ -170,6 +177,7 @@ export class MindAtlasView extends ItemView {
       editorHidden: this.editorHidden,
       debug: this.debug,
       collapsed: [...this.collapsed],
+      expanded: [...this.expanded],
     };
   }
 
@@ -359,6 +367,15 @@ export class MindAtlasView extends ItemView {
       this.plugin.settings.showConnections = this.connBox!.checked;
       void this.plugin.saveSettings();
     };
+    const focusLabel = bar.createEl("label", { attr: { title: "Dim everything except the selected note's parents, children and siblings" } });
+    this.focusBox = focusLabel.createEl("input", { type: "checkbox" });
+    focusLabel.appendText(" Focus");
+    this.focusBox.onchange = () => {
+      this.focusMode = this.focusBox.checked;
+      this.applyFocus();
+    };
+    const tidyBtn = bar.createEl("button", { text: "Tidy", attr: { title: "Find redundant parent links" } });
+    tidyBtn.onclick = () => this.openTidy();
     const edLabel = bar.createEl("label", { attr: { title: "Show or hide the note editor" } });
     this.editorBox = edLabel.createEl("input", { type: "checkbox" });
     edLabel.appendText(" Editor");
@@ -500,6 +517,7 @@ export class MindAtlasView extends ItemView {
       el.toggleClass("is-selected", n.file.path === file.path);
     }
     this.refreshCrossLinks(true);
+    this.applyFocus();
     const title = this.graph?.nodes.find((n) => n.file.path === file.path)?.title ?? file.basename;
     this.editorTitle.value = title;
     if (this.plugin.settings.editorPosition === "pane") {
@@ -606,6 +624,9 @@ export class MindAtlasView extends ItemView {
       backlinks: this.backlinks,
       connections: this.plugin.settings.showConnections,
       collapsed: this.collapsed,
+      childCap: this.plugin.settings.childCap,
+      backlinkCap: this.plugin.settings.collapseBacklinks ? 0 : undefined,
+      expanded: this.expanded,
       maxNodes: this.plugin.settings.maxNodes,
       extras: this.extras
         .map((p) => this.app.vault.getAbstractFileByPath(p))
@@ -647,6 +668,7 @@ export class MindAtlasView extends ItemView {
     this.applyTransform();
     this.refreshEdgeSelection();
     this.updatePreview();
+    this.applyFocus();
     if (this.pendingSelect) {
       const target = graph.nodes.find((n) => n.file.path === this.pendingSelect);
       if (target) {
@@ -898,6 +920,58 @@ export class MindAtlasView extends ItemView {
     this.edgeEls.push({ edge, el, cross, gray, heads, hit, key });
   }
 
+  /** Dim everything but the selected note's parents, children and siblings. */
+  private applyFocus() {
+    const g = this.graph;
+    const sel = g?.nodes.find((n) => n.file.path === this.selectedPath);
+    const active = this.focusMode && !!g && !!sel;
+    const keep = new Set<MapNode>();
+    if (active && g && sel) {
+      const edges = [...g.treeEdges, ...g.crossLinks.filter((e) => e.kind === "child")];
+      keep.add(sel);
+      const parents = edges.filter((e) => e.to === sel).map((e) => e.from);
+      parents.forEach((p) => keep.add(p));
+      for (const e of edges) {
+        if (e.from === sel || parents.includes(e.from)) keep.add(e.to);
+      }
+    }
+    for (const [n, el] of this.nodeEls) el.toggleClass("is-dim", active && !keep.has(n));
+    for (const e of this.edgeEls) {
+      const dim = active && !(keep.has(e.edge.from) && keep.has(e.edge.to));
+      e.el.toggleClass("is-dim", dim);
+      e.hit.toggleClass("is-dim", dim);
+      e.heads.forEach((h) => h.toggleClass("is-dim", dim));
+    }
+  }
+
+  /** List parent links that are already implied through another parent, and offer to remove them. */
+  private openTidy() {
+    const g = this.graph;
+    if (!g) return;
+    const edges = [...g.treeEdges, ...g.crossLinks.filter((e) => e.kind === "child")].filter(
+      (e) => e.from.side !== -1 && e.to.side !== -1
+    );
+    const kids = new Map<MapNode, MapNode[]>();
+    for (const e of edges) (kids.get(e.from) ?? kids.set(e.from, []).get(e.from)!).push(e.to);
+    const reaches = (from: MapNode, to: MapNode, skip: MapNode): boolean => {
+      const seen = new Set<MapNode>([from]);
+      const stack = (kids.get(from) ?? []).filter((c) => c !== skip);
+      while (stack.length) {
+        const n = stack.pop()!;
+        if (n === to) return true;
+        if (seen.has(n)) continue;
+        seen.add(n);
+        stack.push(...(kids.get(n) ?? []));
+      }
+      return false;
+    };
+    const redundant = edges.filter((e) => reaches(e.from, e.to, e.to));
+    new TidyModal(this.app, redundant, async (e) => {
+      await removeChild(this.app, e.from.file, e.to.file);
+      this.scheduleRefresh();
+    }).open();
+  }
+
   private refreshEdgeSelection() {
     for (const e of this.edgeEls) {
       const on = e.key === this.selectedEdgeKey;
@@ -1006,6 +1080,31 @@ export class MindAtlasView extends ItemView {
       dots.setAttribute("dominant-baseline", "central");
       dots.addClass("mind-atlas-more");
       dots.textContent = n.collapsed ? `+${n.hidden}` : "…";
+      dots.addClass("mind-atlas-more-btn");
+      for (const ev of ["pointerdown", "dblclick"]) dots.addEventListener(ev, (e) => e.stopPropagation());
+      dots.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleCollapse(n);
+      });
+    }
+    for (const [count, back] of [[n.more, false], [n.moreBack, true]] as const) {
+      if (!count || n.collapsed) continue;
+      const btn = g.createSvg("text");
+      btn.setAttribute("x", String(back ? -n.w / 2 + 4 : n.w / 2 - 4));
+      btn.setAttribute("y", String(n.h / 2 + 9));
+      btn.setAttribute("text-anchor", back ? "start" : "end");
+      btn.setAttribute("dominant-baseline", "central");
+      btn.addClass("mind-atlas-more");
+      btn.addClass("mind-atlas-more-btn");
+      btn.textContent = back ? `+${count} backlinks` : `+${count} more`;
+      const key = back ? `${n.file.path}#back` : n.file.path;
+      for (const ev of ["pointerdown", "dblclick"]) btn.addEventListener(ev, (e) => e.stopPropagation());
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.expanded.add(key);
+        this.app.workspace.requestSaveLayout();
+        void this.render(false);
+      });
     }
     const iconId = n.iconName ? resolveIcon(n.iconName) : null;
     const glyph = iconId ? iconSvg(iconId) : null;
@@ -2305,5 +2404,41 @@ export class MindAtlasView extends ItemView {
       new Notice(`MindAtlas: could not delete (${(err as Error).message})`);
     }
     this.scheduleRefresh();
+  }
+}
+
+class TidyModal extends Modal {
+  constructor(
+    app: App,
+    private items: Edge[],
+    private remove: (e: Edge) => Promise<void>
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    this.titleEl.setText("Tidy links");
+    if (!this.items.length) {
+      this.contentEl.createEl("p", { text: "No redundant parent links found on this map." });
+      return;
+    }
+    this.contentEl.createEl("p", {
+      text: "These notes are linked directly from a parent and also reachable through another note on the map.",
+    });
+    for (const e of this.items) {
+      new Setting(this.contentEl)
+        .setName(`${e.from.title} → ${e.to.title}`)
+        .addButton((b) =>
+          b.setButtonText("Remove link").onClick(async () => {
+            b.setDisabled(true);
+            await this.remove(e);
+            b.setButtonText("Removed");
+          })
+        );
+    }
+  }
+
+  onClose() {
+    this.contentEl.empty();
   }
 }

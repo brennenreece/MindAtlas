@@ -27,6 +27,8 @@ export interface MindAtlasSettings {
   defaultDepth: number;
   // Gap in px between linked nodes.
   spacing: number;
+  childCap: number;
+  collapseBacklinks: boolean;
   hasSeenGuide: boolean;
 }
 
@@ -50,6 +52,8 @@ export const DEFAULT_SETTINGS: MindAtlasSettings = {
   editorPosition: "bottom",
   defaultDepth: 3,
   spacing: 50,
+  childCap: 8,
+  collapseBacklinks: true,
   hasSeenGuide: false,
 };
 
@@ -97,6 +101,8 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
     maxNodes: num(s.maxNodes, d.maxNodes, 50, 2000),
     defaultDepth: Math.round(num(s.defaultDepth, d.defaultDepth, 1, 6)),
     spacing: num(s.spacing, d.spacing, 0, 200),
+    childCap: num(s.childCap, d.childCap, 0, 100),
+    collapseBacklinks: typeof s.collapseBacklinks === "boolean" ? s.collapseBacklinks : d.collapseBacklinks,
     hasSeenGuide: bool(s.hasSeenGuide, d.hasSeenGuide),
   };
 }
@@ -168,6 +174,9 @@ export class MindAtlasSettingTab extends PluginSettingTab {
 
     // Layout
     new Setting(containerEl).setName("Layout").setHeading();
+    slider(containerEl, "Children shown per note", 0, 30, 1, () => s.childCap, (v) => (s.childCap = v)).setDesc(
+      "Notes with more children show a “+N more” button instead. 0 shows everything."
+    );
     slider(containerEl, "Node spacing", 0, 200, 5, () => s.spacing, (v) => (s.spacing = v)).setDesc(
       "Gap between a note and its children. Branches arrange themselves around the center; you can also drag notes."
     );
@@ -290,6 +299,15 @@ export class MindAtlasSettingTab extends PluginSettingTab {
         })
       );
     color("Line color", "Color of connecting lines.", () => s.lineColor, (v) => (s.lineColor = v));
+    new Setting(containerEl)
+      .setName("Collapse backlinks")
+      .setDesc("Hide backlink notes behind a “+N backlinks” button until you click it.")
+      .addToggle((t) =>
+        t.setValue(s.collapseBacklinks).onChange(async (v) => {
+          s.collapseBacklinks = v;
+          await save();
+        })
+      );
     new Setting(containerEl)
       .setName("Show all connections")
       .setDesc("Also show notes linked to or from the notes on the map that aren't children of anything. They float on their own, joined only by dashed lines.")

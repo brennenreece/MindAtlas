@@ -33,6 +33,9 @@ export interface MapNode {
   // Children are hidden by the user; `hidden` counts the linked notes not shown.
   collapsed: boolean;
   hidden: number;
+  // Outgoing / backlink children left out because the note has more than the child cap.
+  more: number;
+  moreBack: number;
   // From frontmatter (mindmap-color / mindmap-icon / mindmap-status), color is inherited.
   color?: string;
   icon?: string;
@@ -63,6 +66,11 @@ export interface GraphOptions {
   extras?: TFile[];
   // Paths whose children are hidden.
   collapsed?: Set<string>;
+  // Most children shown per note (0 = no cap); `expanded` holds "path" / "path#back" keys lifted from the cap.
+  childCap?: number;
+  // Cap for backlink notes per note; defaults to childCap. 0 hides them behind a button.
+  backlinkCap?: number;
+  expanded?: Set<string>;
   maxNodes?: number;
   // Also show notes that visible notes connect to (not as children).
   connections?: boolean;
@@ -169,6 +177,9 @@ export async function buildGraph(
 ): Promise<MapGraph> {
   const MAX_NODES = opts.maxNodes ?? 400;
   const collapsed = opts.collapsed ?? new Set<string>();
+  const cap = opts.childCap && opts.childCap > 0 ? opts.childCap : Infinity;
+  const backCap = opts.backlinkCap ?? cap;
+  const expanded = opts.expanded ?? new Set<string>();
   const makeNode = (
     file: TFile,
     side: 1 | -1 | 0,
@@ -198,6 +209,8 @@ export async function buildGraph(
       branch,
       collapsed: side !== 0 && collapsed.has(file.path),
       hidden: 0,
+      more: 0,
+      moreBack: 0,
       // Presentation belongs to the note, never to its current placement parent.
       color: meta.color,
       icon: meta.icon,
@@ -219,6 +232,7 @@ export async function buildGraph(
     const next: MapNode[] = [];
     for (const n of frontier) {
       if (n.collapsed) continue;
+      let shown = 0;
       for (const f of await childLinks(app, n.file)) {
         const existing = visited.get(f.path);
         if (existing) {
@@ -230,6 +244,11 @@ export async function buildGraph(
           continue;
         }
         if (visited.size >= MAX_NODES) continue;
+        if (shown >= cap && !expanded.has(n.file.path)) {
+          n.more++;
+          continue;
+        }
+        shown++;
         const c = makeNode(f, 1, d + 1, n, n === root ? root.children.length : n.branch);
         visited.set(f.path, c);
         n.children.push(c);
@@ -255,8 +274,14 @@ export async function buildGraph(
       const next: MapNode[] = [];
       for (const n of front) {
         if (n.collapsed) continue;
+        let shown = 0;
         for (const f of sources(n.file)) {
           if (visited.has(f.path) || visited.size >= MAX_NODES) continue;
+          if (shown >= backCap && !expanded.has(`${n.file.path}#back`)) {
+            n.moreBack++;
+            continue;
+          }
+          shown++;
           const c = makeNode(f, -1, d + 1, n);
           visited.set(f.path, c);
           (n === root ? backRoots : n.children).push(c);

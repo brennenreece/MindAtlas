@@ -73,23 +73,37 @@ export function arrange(root: MapNode, edges: Edge[], spacing: number, crossLink
       if (!list.length) return;
       let fanStart = start;
       let fanSpan = span;
-      if (n !== root && span > MAX_FAN) {
+      if (span > MAX_FAN) {
         fanStart = start + (span - MAX_FAN) / 2;
         fanSpan = MAX_FAN;
       }
+      sweep(n, list, fanStart, fanSpan);
+    };
+    const sweep = (n: MapNode, list: MapNode[], start: number, span: number) => {
       const total = list.reduce((sum, c) => sum + weight.get(c)!, 0);
-      let a = fanStart;
-      list.forEach((c, i) => {
-        const s = (fanSpan * weight.get(c)!) / total;
-        // The first top-level branch points right; the rest follow clockwise.
-        if (n === root && i === 0) a -= s / 2;
+      let a = start;
+      for (const c of list) {
+        const s = (span * weight.get(c)!) / total;
         angle.set(c, a + s / 2);
         level.set(c, level.get(n)! + 1);
         walk(c, a, s);
         a += s;
-      });
+      }
     };
-    walk(root, 0, 2 * Math.PI);
+    // Backlinks get their own arc centred at the top; outgoing branches share the rest.
+    const rootKids = order.get(root) ?? [];
+    const out = rootKids.filter((c) => c.side !== -1);
+    const back = rootKids.filter((c) => c.side === -1);
+    const wOut = out.reduce((sum, c) => sum + weight.get(c)!, 0);
+    const wBack = back.reduce((sum, c) => sum + weight.get(c)!, 0);
+    let backSpan = 0;
+    if (back.length) {
+      backSpan = out.length ? (2 * Math.PI * wBack) / (wBack + wOut) : 1.1 * Math.PI;
+      backSpan = Math.min(1.1 * Math.PI, Math.max(Math.PI / 3, backSpan));
+    }
+    const top = -Math.PI / 2;
+    if (back.length) sweep(root, back, top - backSpan / 2, backSpan);
+    if (out.length) sweep(root, out, top + backSpan / 2, 2 * Math.PI - backSpan);
   };
 
   place();
@@ -124,28 +138,43 @@ export function arrange(root: MapNode, edges: Edge[], spacing: number, crossLink
   for (const [p, list] of kids) for (const c of list) parentOf.set(c, p);
   const gap = Math.max(10, spacing);
   const sideGap = Math.max(10, gap * 0.4);
-  const ring: number[] = [0];
-  for (let l = 1; l <= maxLevel; l++) {
-    let r = ring[l - 1];
-    for (const n of byLevel[l]) {
-      const p = parentOf.get(n)!;
-      const a = angle.get(n)!;
-      r = Math.max(r, ring[l - 1] + halfExtent(p, a) + halfExtent(n, a) + gap);
+  const ringsFor = (inGroup: (n: MapNode) => boolean) => {
+    const ring: number[] = [0];
+    for (let l = 1; l <= maxLevel; l++) {
+      let r = ring[l - 1];
+      const members = byLevel[l].filter(inGroup);
+      for (const n of members) {
+        const p = parentOf.get(n)!;
+        const a = angle.get(n)!;
+        r = Math.max(r, ring[l - 1] + halfExtent(p, a) + halfExtent(n, a) + gap);
+      }
+      const siblings = [...members].sort((x, y) => angle.get(x)! - angle.get(y)!);
+      for (let i = 0; i < siblings.length && siblings.length > 1; i++) {
+        const u = siblings[i];
+        const v = siblings[(i + 1) % siblings.length];
+        const delta = Math.min(Math.PI, Math.abs(wrap(angle.get(v)! - angle.get(u)!)));
+        if (delta < 1e-4) continue;
+        const mid = angle.get(u)! + delta / 2 + Math.PI / 2;
+        const need = halfExtent(u, mid) + halfExtent(v, mid) + sideGap;
+        r = Math.max(r, need / (2 * Math.sin(delta / 2)));
+      }
+      ring.push(r);
     }
-    const siblings = [...byLevel[l]].sort((x, y) => angle.get(x)! - angle.get(y)!);
-    for (let i = 0; i < siblings.length && siblings.length > 1; i++) {
-      const u = siblings[i];
-      const v = siblings[(i + 1) % siblings.length];
-      const delta = Math.min(Math.PI, Math.abs(wrap(angle.get(v)! - angle.get(u)!)));
-      if (delta < 1e-4) continue;
-      const mid = angle.get(u)! + delta / 2 + Math.PI / 2;
-      const need = halfExtent(u, mid) + halfExtent(v, mid) + sideGap;
-      r = Math.max(r, need / (2 * Math.sin(delta / 2)));
-    }
-    ring.push(r);
-  }
+    return ring;
+  };
+  const isBack = new Map<MapNode, boolean>();
+  const markBack = (n: MapNode, b: boolean) => {
+    isBack.set(n, b);
+    for (const c of kids.get(n) ?? []) markBack(c, b || c.side === -1);
+  };
+  markBack(root, false);
+  const outRing = ringsFor((n) => !isBack.get(n));
+  const backRing = ringsFor((n) => !!isBack.get(n));
+  // Backlink notes sit farther out than the outgoing map.
+  const BACK_PUSH = 1.3;
   for (const [n, a] of angle) {
-    const r = ring[level.get(n)!];
+    const l = level.get(n)!;
+    const r = isBack.get(n) ? backRing[l] * BACK_PUSH + gap * 2 : outRing[l];
     n.bx = Math.cos(a) * r;
     n.by = Math.sin(a) * r;
   }

@@ -122,3 +122,5 @@
 
 .mind-atlas-editor { min-height: 0; }
 .mind-atlas-container.is-keyboard.is-editor-right > .mind-atlas-map, .mind-atlas-container.is-keyboard.is-editor-right > .mind-atlas-editor-pane { height: var(--ma-h) !important; max-height: none; }
+.mind-atlas-node text.mind-atlas-more-btn { pointer-events: all; cursor: pointer; fill: var(--text-accent); }
+.mind-atlas-node.is-dim, .mind-atlas-edge.is-dim, .mind-atlas-cross.is-dim, .mind-atlas-head.is-dim { opacity: 0.12; }
