@@ -84,7 +84,7 @@ export class MindAtlasView extends ItemView {
   private dragging: MapNode | null = null;
   private menuCenterBtn!: HTMLElement;
   private openIconPalette: () => void = () => {};
-  private spreadBtn!: HTMLButtonElement;
+  private spreadSlider!: HTMLInputElement;
   private undo = new UndoStack(this.app, () => this.scheduleRefresh());
   private nodeEls = new Map<MapNode, SVGGElement>();
   private edgeEls: {
@@ -394,8 +394,18 @@ export class MindAtlasView extends ItemView {
       void this.plugin.saveSettings();
     };
 
-    this.spreadBtn = bar.createEl("button", { attr: { title: "Change how far branches spread apart" } });
-    this.spreadBtn.onclick = () => this.cycleSpread();
+    const spreadLabel = bar.createEl("label", { attr: { title: "Distance between nodes" } });
+    spreadLabel.appendText("Spread ");
+    this.spreadSlider = spreadLabel.createEl("input", { type: "range" });
+    this.spreadSlider.min = "0";
+    this.spreadSlider.max = "120";
+    this.spreadSlider.step = "5";
+    this.spreadSlider.addClass("mind-atlas-spread");
+    this.spreadSlider.onchange = () => {
+      this.plugin.settings.spacing = Number(this.spreadSlider.value);
+      void this.plugin.saveSettings();
+      void this.render(true);
+    };
 
     minus.onclick = () => this.setDepth(this.depth - 1);
     plus.onclick = () => this.setDepth(this.depth + 1);
@@ -404,15 +414,6 @@ export class MindAtlasView extends ItemView {
       void this.render(true);
     };
     this.syncToolbar();
-  }
-
-  private cycleSpread() {
-    const s = this.plugin.settings;
-    const steps = [30, 50, 80];
-    const next = steps.find((v) => v > s.spacing) ?? steps[0];
-    s.spacing = next;
-    void this.plugin.saveSettings();
-    void this.render(true);
   }
 
   private buildGettingStarted() {
@@ -469,10 +470,7 @@ export class MindAtlasView extends ItemView {
   private syncToolbar() {
     if (this.depthLabel) this.depthLabel.setText(String(this.depth));
     if (this.backlinkBox) this.backlinkBox.checked = this.backlinks;
-    if (this.spreadBtn) {
-      const v = this.plugin.settings.spacing;
-      this.spreadBtn.setText(`Spread: ${v <= 35 ? "Tight" : v >= 70 ? "Loose" : "Balanced"}`);
-    }
+    if (this.spreadSlider) this.spreadSlider.value = String(this.plugin.settings.spacing);
     if (this.boxBox) this.boxBox.checked = this.plugin.settings.showBoxes;
     if (this.editorBox) this.editorBox.checked = !this.editorHidden;
     this.contentEl.toggleClass("is-editor-hidden", this.editorHidden);
@@ -643,10 +641,8 @@ export class MindAtlasView extends ItemView {
     this.refreshCrossLinks();
     this.relayout(this.positions.size === 0);
     if (recenter) {
-      const rect = this.svg.getBoundingClientRect();
-      this.scale = 1;
-      this.tx = rect.width / 2;
-      this.ty = rect.height / 2;
+      this.fitMap();
+      window.requestAnimationFrame(() => this.fitMap());
     }
     this.applyTransform();
     this.refreshEdgeSelection();
@@ -959,7 +955,7 @@ export class MindAtlasView extends ItemView {
     const accent = s.boxColor || "var(--interactive-accent)";
     const rect = g.createSvg("rect");
     // Without a box, keep a slightly larger invisible hit area for clicking.
-    const boxed = s.showBoxes || !!n.floating;
+    const boxed = s.showBoxes || !!n.floating || n.side === -1;
     const hit = boxed ? 0 : 6;
     rect.setAttribute("x", String(-n.w / 2 - hit));
     rect.setAttribute("y", String(-n.h / 2 + n.iconH - hit));
@@ -971,9 +967,9 @@ export class MindAtlasView extends ItemView {
     rect.style.stroke = "none";
     if (boxed) {
       const col = this.colorOf(n);
-      rect.style.stroke = n.side === -1 ? "#3f434a" : n.floating ? "var(--text-faint)" : col ?? accent;
+      rect.style.stroke = n.side === -1 ? "#6b7280" : n.floating ? "var(--text-faint)" : col ?? accent;
       rect.style.strokeWidth = String(s.boxBorderWidth);
-      if (n.side === -1) rect.style.fill = "#3f434a";
+      if (n.side === -1) rect.style.fill = "#6b7280";
       else if (isRoot) rect.style.fill = accent;
       else if (s.boxFilled) {
         rect.style.fill = col

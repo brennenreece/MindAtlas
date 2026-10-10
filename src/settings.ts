@@ -96,7 +96,7 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
     iconSize: num(s.iconSize, d.iconSize, 10, 80),
     maxNodes: num(s.maxNodes, d.maxNodes, 50, 2000),
     defaultDepth: Math.round(num(s.defaultDepth, d.defaultDepth, 1, 6)),
-    spacing: num(s.spacing, d.spacing, 10, 200),
+    spacing: num(s.spacing, d.spacing, 0, 200),
     hasSeenGuide: bool(s.hasSeenGuide, d.hasSeenGuide),
   };
 }
@@ -168,7 +168,7 @@ export class MindAtlasSettingTab extends PluginSettingTab {
 
     // Layout
     new Setting(containerEl).setName("Layout").setHeading();
-    slider(containerEl, "Node spacing", 10, 200, 5, () => s.spacing, (v) => (s.spacing = v)).setDesc(
+    slider(containerEl, "Node spacing", 0, 200, 5, () => s.spacing, (v) => (s.spacing = v)).setDesc(
       "Gap between a note and its children. Branches arrange themselves around the center; you can also drag notes."
     );
 
