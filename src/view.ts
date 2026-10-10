@@ -1082,14 +1082,9 @@ export class MindAtlasView extends ItemView {
       const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
       const [a, b] = anchors[i];
       if (cross) {
-        const dx = b.p.x - a.p.x;
-        const dy = b.p.y - a.p.y;
-        const len = Math.hypot(dx, dy) || 1;
         const route = routed.get(this.edgeEls[i].key);
-        // The router tries the straight segment first; only bend when it must
-        // avoid a note or an already-routed line.
         const points = route?.points ?? [a.p, b.p];
-        const d = `M${points.map((p) => `${p.x},${p.y}`).join(" L")}`;
+        const d = roundedRoutePath(points);
         el.setAttribute("d", d);
         this.edgeEls[i].hit.setAttribute("d", d);
         const unit = (from: Pt, to: Pt) => {
@@ -1103,11 +1098,12 @@ export class MindAtlasView extends ItemView {
       // Structural lines use the same obstacle-aware router as connections.
       // Unlike connections, they are never allowed to cross earlier lines.
       const structural = routed.get(this.edgeEls[i].key);
+      const structuralPoints = structural?.points ?? [a.p, b.p];
       const fromThick = !(edge.back && !edge.fwd);
       const sz: [number, number] = [this.fontOf(edge.from).px / 18, this.fontOf(edge.to).px / 18];
       el.setAttribute(
         "d",
-        structural ? `M${structural.points.map((p) => `${p.x},${p.y}`).join(" L")}`
+        structural ? roundedRoutePath(structuralPoints)
           : fromThick ? this.linePath(a, b, style, k, sz) : this.linePath(b, a, style, k, [sz[1], sz[0]])
       );
       this.edgeEls[i].hit.setAttribute(
@@ -1128,7 +1124,12 @@ export class MindAtlasView extends ItemView {
           return;
         }
         let dir: Pt;
-        if (style === "straight") {
+        if (structural) {
+          dir = routeUnit(
+            idx === 0 ? structuralPoints[1] ?? b.p : structuralPoints[structuralPoints.length - 2] ?? a.p,
+            idx === 0 ? a.p : b.p
+          );
+        } else if (style === "straight") {
           const len = Math.hypot(end.p.x - other.p.x, end.p.y - other.p.y) || 1;
           dir = { x: (end.p.x - other.p.x) / len, y: (end.p.y - other.p.y) / len };
         } else {
@@ -2544,4 +2545,27 @@ function arrowHead(tip: Pt, dir: Pt, size: number): string {
   const px = -dir.y * w;
   const py = dir.x * w;
   return `M${tip.x},${tip.y} L${bx + px},${by + py} L${bx - px},${by - py} Z`;
+}
+
+/** Convert obstacle-routing waypoints into a visually smooth, rounded path. */
+function roundedRoutePath(points: Pt[]) {
+  if (points.length < 3) return `M${points[0].x},${points[0].y} L${points[points.length - 1].x},${points[points.length - 1].y}`;
+  const radius = 12;
+  let d = `M${points[0].x},${points[0].y}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = points[i - 1], corner = points[i], next = points[i + 1];
+    const inLen = Math.hypot(corner.x - prev.x, corner.y - prev.y) || 1;
+    const outLen = Math.hypot(next.x - corner.x, next.y - corner.y) || 1;
+    const r = Math.min(radius, inLen / 2, outLen / 2);
+    const before = { x: corner.x + (prev.x - corner.x) * r / inLen, y: corner.y + (prev.y - corner.y) * r / inLen };
+    const after = { x: corner.x + (next.x - corner.x) * r / outLen, y: corner.y + (next.y - corner.y) * r / outLen };
+    d += ` L${before.x},${before.y} Q${corner.x},${corner.y} ${after.x},${after.y}`;
+  }
+  const end = points[points.length - 1];
+  return `${d} L${end.x},${end.y}`;
+}
+
+function routeUnit(from: Pt, to: Pt): Pt {
+  const length = Math.hypot(to.x - from.x, to.y - from.y) || 1;
+  return { x: (to.x - from.x) / length, y: (to.y - from.y) / length };
 }

@@ -1,7 +1,7 @@
 {
   "id": "mind-atlas",
   "name": "MindAtlas",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "minAppVersion": "1.4.0",
   "description": "Mind-map view over your notes: every node is a markdown note linked under a ## Children heading.",
   "author": "Brennen Reece",
