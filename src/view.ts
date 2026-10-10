@@ -369,8 +369,6 @@ export class MindAtlasView extends ItemView {
   }
 
   private applyTransform() {
-    // Zoomed far out, drop the deepest labels so the overall shape stays readable.
-    this.svg?.toggleClass("ma-zoom-far", this.scale < 0.55);
     this.group.setAttribute(
       "transform",
       `translate(${this.tx} ${this.ty}) scale(${this.scale})`
@@ -913,7 +911,6 @@ export class MindAtlasView extends ItemView {
     const f = this.fontOf(n);
     const g = layer.createSvg("g");
     g.addClass("mind-atlas-node");
-    if (n.depth >= 3) g.addClass("ma-deep");
     if (isRoot) g.addClass("is-root");
     if (n.file.path === this.selectedPath) g.addClass("is-selected");
     if (n.side === -1 || n.floating) g.addClass("is-back");
