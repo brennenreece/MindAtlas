@@ -103,6 +103,7 @@ export class MindAtlasView extends ItemView {
   private openIconPalette: () => void = () => {};
   private layoutBtn!: HTMLButtonElement;
   private forceBtn!: HTMLButtonElement;
+  private lineEngineSelect!: HTMLSelectElement;
   private undo = new UndoStack(this.app, () => this.scheduleRefresh());
   private nodeEls = new Map<MapNode, SVGGElement>();
   private edgeEls: {
@@ -420,6 +421,30 @@ export class MindAtlasView extends ItemView {
     };
     this.forceBtn = bar.createEl("button", { attr: { title: "Adjust repel and gravity for the radial force layout" } });
     this.forceBtn.onclick = () => this.cycleForcePreset();
+    this.lineEngineSelect = bar.createEl("select", { attr: { title: "Choose a line engine from recent releases" } });
+    const engines: [string, string][] = [
+      ["0.1.16", "0.1.16 · Radial map"],
+      ["0.1.17", "0.1.17 · Force settling"],
+      ["0.1.18", "0.1.18 · Tuned force layout"],
+      ["0.1.19", "0.1.19 · Explicit relationships"],
+      ["0.1.20", "0.1.20 · Relationship routing"],
+      ["0.1.21", "0.1.21 · Routed"],
+      ["0.1.22", "0.1.22 · Rounded"],
+      ["0.1.23", "0.1.23 · Elbows"],
+      ["0.1.24", "0.1.24 · Bézier"],
+      ["0.1.25", "0.1.25 · Organic Bézier"],
+      ["0.1.26", "0.1.26 · Dynamic lanes"],
+      ["0.1.27", "0.1.27 · Direct lines"],
+      ["0.1.28", "0.1.28 · Anchored lines"],
+      ["0.1.29", "0.1.29 · Full catalog"],
+    ];
+    engines.forEach(([version, label]) => this.lineEngineSelect.createEl("option", { text: label, value: version }));
+    this.lineEngineSelect.value = this.plugin.settings.lineEngine;
+    this.lineEngineSelect.onchange = () => {
+      this.plugin.settings.lineEngine = this.lineEngineSelect.value as typeof this.plugin.settings.lineEngine;
+      void this.plugin.saveSettings();
+      this.updatePositions();
+    };
 
     minus.onclick = () => this.setDepth(this.depth - 1);
     plus.onclick = () => this.setDepth(this.depth + 1);
@@ -505,6 +530,7 @@ export class MindAtlasView extends ItemView {
       const name = t.repel <= 15 && t.gravity >= 70 ? "Tight" : t.repel >= 35 && t.gravity <= 50 ? "Loose" : "Balanced";
       this.forceBtn.setText(`Force: ${name}`);
     }
+    if (this.lineEngineSelect) this.lineEngineSelect.value = this.plugin.settings.lineEngine;
     if (this.boxBox) this.boxBox.checked = this.plugin.settings.showBoxes;
     if (this.editorBox) this.editorBox.checked = !this.editorHidden;
     this.contentEl.toggleClass("is-editor-hidden", this.editorHidden);
@@ -1131,7 +1157,7 @@ export class MindAtlasView extends ItemView {
         return;
       }
       const points = [a.p, b.p];
-      const structuralPath = `M${a.p.x},${a.p.y} L${b.p.x},${b.p.y}`;
+      const structuralPath = structuralPathFor(this.plugin.settings.lineEngine, a, b);
       el.setAttribute(
         "d",
         structuralPath
@@ -2588,6 +2614,49 @@ function roundedRoutePath(points: Pt[], radius = 12) {
   }
   const end = points[points.length - 1];
   return `${d} L${end.x},${end.y}`;
+}
+
+function structuralPathFor(version: string, a: Anchor, b: Anchor): string {
+  // The Oct. 8 builds used the original smooth cubic structural renderer.
+  // Their layout/relationship work changed around it, but the line family
+  // remained the same until obstacle routing was introduced in 0.1.21.
+  if (version === "0.1.16" || version === "0.1.17" || version === "0.1.18" || version === "0.1.19" || version === "0.1.20") {
+    const controls = computeCubicControls(a, b, "curved");
+    if (controls) {
+      const [p1, c1, c2, p2] = controls;
+      return `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
+    }
+  }
+  // 0.1.21 routed around boxes with straight orthogonal segments, before
+  // the rounded-corner pass landed in 0.1.22.
+  if (version === "0.1.21") {
+    const dx = b.p.x - a.p.x;
+    const dy = b.p.y - a.p.y;
+    const horizontal = Math.abs(dx) >= Math.abs(dy);
+    const bend = 0.55;
+    const points = horizontal
+      ? [a.p, { x: a.p.x + dx * bend, y: a.p.y }, { x: a.p.x + dx * bend, y: b.p.y }, b.p]
+      : [a.p, { x: a.p.x, y: a.p.y + dy * bend }, { x: b.p.x, y: a.p.y + dy * bend }, b.p];
+    return `M${points.map((p) => `${p.x},${p.y}`).join(" L")}`;
+  }
+  if (version === "0.1.27" || version === "0.1.28" || version === "0.1.29") {
+    return `M${a.p.x},${a.p.y} L${b.p.x},${b.p.y}`;
+  }
+  if (version === "0.1.24" || version === "0.1.25") {
+    const controls = computeCubicControls(a, b, version === "0.1.25" ? "organic" : "curved");
+    if (controls) {
+      const [p1, c1, c2, p2] = controls;
+      return `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
+    }
+  }
+  const dx = b.p.x - a.p.x;
+  const dy = b.p.y - a.p.y;
+  const horizontal = Math.abs(dx) >= Math.abs(dy);
+  const bend = version === "0.1.26" ? 0.62 : 0.55;
+  const points = horizontal
+    ? [a.p, { x: a.p.x + dx * bend, y: a.p.y }, { x: a.p.x + dx * bend, y: b.p.y }, b.p]
+    : [a.p, { x: a.p.x, y: a.p.y + dy * bend }, { x: b.p.x, y: a.p.y + dy * bend }, b.p];
+  return roundedRoutePath(points, version === "0.1.22" ? 6 : 12);
 }
 
 function routeUnit(from: Pt, to: Pt): Pt {

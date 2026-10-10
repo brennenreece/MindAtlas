@@ -15,6 +15,7 @@ export interface MindAtlasSettings {
   // Empty string = theme accent color.
   boxColor: string;
   lineStyle: "curved" | "organic" | "straight";
+  lineEngine: "0.1.16" | "0.1.17" | "0.1.18" | "0.1.19" | "0.1.20" | "0.1.21" | "0.1.22" | "0.1.23" | "0.1.24" | "0.1.25" | "0.1.26" | "0.1.27" | "0.1.28" | "0.1.29";
   lineWidth: number;
   // Lines get thinner for deeper generations.
   taperLines: boolean;
@@ -44,6 +45,7 @@ export const DEFAULT_SETTINGS: MindAtlasSettings = {
   boxPadding: 12,
   boxColor: "",
   lineStyle: "curved",
+  lineEngine: "0.1.27",
   lineWidth: 1.5,
   taperLines: false,
   lineColor: "",
@@ -90,6 +92,7 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
     boxPadding: num(s.boxPadding, d.boxPadding, 2, 30),
     boxColor: str(s.boxColor, d.boxColor),
     lineStyle: s.lineStyle === "straight" || s.lineStyle === "organic" ? s.lineStyle : "curved",
+    lineEngine: ["0.1.16", "0.1.17", "0.1.18", "0.1.19", "0.1.20", "0.1.21", "0.1.22", "0.1.23", "0.1.24", "0.1.25", "0.1.26", "0.1.27", "0.1.28", "0.1.29"].includes(s.lineEngine) ? s.lineEngine : d.lineEngine,
     lineWidth: num(s.lineWidth, d.lineWidth, 0.5, 8),
     taperLines: bool(s.taperLines, d.taperLines),
     lineColor: str(s.lineColor, d.lineColor),
