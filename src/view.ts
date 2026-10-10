@@ -301,7 +301,7 @@ export class MindAtlasView extends ItemView {
     this.editorPane = this.contentEl.createDiv("mind-atlas-editor-pane");
     this.editorTitle = this.editorPane.createEl("input", {
       cls: "mind-atlas-editor-title",
-      attr: { type: "text", spellcheck: "false", "aria-label": "Note title (press Enter to rename)" },
+      attr: { type: "text", spellcheck: "false", "aria-label": "Map title (press Enter to save)" },
     });
     this.editorTitle.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -309,13 +309,13 @@ export class MindAtlasView extends ItemView {
         e.preventDefault();
         this.editorTitle.blur();
       } else if (e.key === "Escape") {
-        this.editorTitle.value = this.editor?.currentFile?.basename ?? "";
+        this.editorTitle.value = this.selectedNode()?.title ?? "";
         this.editorTitle.blur();
       }
     });
     this.editorTitle.addEventListener("blur", () => {
-      const f = this.editor?.currentFile;
-      if (f) void this.renameFile(f, this.editorTitle.value);
+      const n = this.selectedNode();
+      if (n) void this.setMapTitle(n, this.editorTitle.value);
     });
     const host = this.editorPane.createDiv("mind-atlas-editor");
     this.editor = new NoteEditor(this.app, host, (f) => this.selectNode(f));
@@ -346,6 +346,9 @@ export class MindAtlasView extends ItemView {
   private applyEditorLayout() {
     if (!this.editorPane) return;
     const right = this.plugin.settings.editorPosition === "right";
+    const pane = this.plugin.settings.editorPosition === "pane";
+    this.editorPane.toggleClass("is-hidden", pane);
+    if (pane) return;
     this.contentEl.toggleClass("is-editor-right", right);
     if (right) {
       this.editorPane.style.width = `${this.editorWidth}px`;
@@ -380,6 +383,15 @@ export class MindAtlasView extends ItemView {
       this.editorHidden = !this.editorBox!.checked;
       this.syncToolbar();
       this.app.workspace.requestSaveLayout();
+    };
+    const editorPosition = bar.createEl("select", { attr: { title: "Editor position" } });
+    editorPosition.createEl("option", { text: "Below", value: "bottom" });
+    editorPosition.createEl("option", { text: "Right", value: "right" });
+    editorPosition.createEl("option", { text: "Pane", value: "pane" });
+    editorPosition.value = this.plugin.settings.editorPosition;
+    editorPosition.onchange = () => {
+      this.plugin.settings.editorPosition = editorPosition.value as "bottom" | "right" | "pane";
+      void this.plugin.saveSettings();
     };
     if (Platform.isMobile) {
       const dbLabel = bar.createEl("label", { attr: { title: "Show the layout debug readout" } });
@@ -499,8 +511,11 @@ export class MindAtlasView extends ItemView {
       el.toggleClass("is-selected", n.file.path === file.path);
     }
     this.refreshCrossLinks(true);
-    this.editorTitle.value = file.basename;
-    void this.editor?.open(file);
+    const title = this.graph?.nodes.find((n) => n.file.path === file.path)?.title ?? file.basename;
+    this.editorTitle.value = title;
+    if (this.plugin.settings.editorPosition === "pane") {
+      void this.app.workspace.getLeaf("split", "vertical").openFile(file);
+    } else void this.editor?.open(file);
   }
 
   private scheduleRefresh() {
@@ -787,9 +802,13 @@ export class MindAtlasView extends ItemView {
 
   /** Branch color for a note: its own/inherited frontmatter color, else its branch's palette color. */
   private colorOf(n: MapNode): string | undefined {
-    if (n.side === -1 || n.floating) return undefined;
+    if (n.floating) return undefined;
     if (n.color) return n.color;
-    if (this.plugin.settings.branchColors && n.branch >= 0) return BRANCH_COLORS[n.branch % BRANCH_COLORS.length];
+    if (this.plugin.settings.branchColors) {
+      let hash = 0;
+      for (const c of n.file.path) hash = ((hash * 31) + c.charCodeAt(0)) | 0;
+      return BRANCH_COLORS[Math.abs(hash) % BRANCH_COLORS.length];
+    }
     return undefined;
   }
 
@@ -1033,21 +1052,10 @@ export class MindAtlasView extends ItemView {
     this.positionMenu();
     this.positionInline();
     this.updatePreview();
-    const occupied = this.edgeEls.flatMap(({ edge, cross }, i) => {
-      if (cross) return [];
-      const style = s.lineStyle;
-      const fromThick = !(edge.back && !edge.fwd);
-      const [a, b] = anchors[i];
-      const controls = fromThick ? this.lineControlPoints(a, b, style) : this.lineControlPoints(b, a, style);
-      return [{
-        source: edge.from.file.path,
-        target: edge.to.file.path,
-        points: controls ? sampleCubic(...controls) : [a.p, b.p],
-      }];
-    });
-    const links = routeCrossLinks && s.layoutMode === "radial"
+    const occupied: { source: string; target: string; points: Pt[] }[] = [];
+    const links = routeCrossLinks
       ? this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
-          if (!cross || el.hasClass("is-hidden")) return [];
+          if (cross && el.hasClass("is-hidden")) return [];
           const [a, b] = anchors[i];
           return [{
             key,
@@ -1055,8 +1063,9 @@ export class MindAtlasView extends ItemView {
             target: edge.to.file.path,
             start: a.p,
             end: b.p,
+            strict: !cross,
           }];
-        })
+        }).sort((a, b) => Number(b.strict) - Number(a.strict) || a.key.localeCompare(b.key))
       : [];
     const routed = findCrossLinkRoutes(
       links,
@@ -1087,12 +1096,15 @@ export class MindAtlasView extends ItemView {
         heads[1].setAttribute("d", edge.fwd ? arrowHead(b.p, unit(c, b.p), 8) : "");
         return;
       }
-      // The ribbon is thickest at the note holding the link (the backlink end).
+      // Structural lines use the same obstacle-aware router as connections.
+      // Unlike connections, they are never allowed to cross earlier lines.
+      const structural = routed.get(this.edgeEls[i].key);
       const fromThick = !(edge.back && !edge.fwd);
       const sz: [number, number] = [this.fontOf(edge.from).px / 18, this.fontOf(edge.to).px / 18];
       el.setAttribute(
         "d",
-        fromThick ? this.linePath(a, b, style, k, sz) : this.linePath(b, a, style, k, [sz[1], sz[0]])
+        structural ? `M${a.p.x},${a.p.y} Q${structural.control.x},${structural.control.y} ${b.p.x},${b.p.y}`
+          : fromThick ? this.linePath(a, b, style, k, sz) : this.linePath(b, a, style, k, [sz[1], sz[0]])
       );
       this.edgeEls[i].hit.setAttribute(
         "d",
@@ -1154,9 +1166,10 @@ export class MindAtlasView extends ItemView {
     rect.style.stroke = "none";
     if (boxed) {
       const col = this.colorOf(n);
-      rect.style.stroke = n.side === -1 || n.floating ? "var(--text-faint)" : col ?? accent;
+      rect.style.stroke = n.side === -1 ? "#3f434a" : n.floating ? "var(--text-faint)" : col ?? accent;
       rect.style.strokeWidth = String(s.boxBorderWidth);
-      if (isRoot) rect.style.fill = accent;
+      if (n.side === -1) rect.style.fill = "#3f434a";
+      else if (isRoot) rect.style.fill = accent;
       else if (s.boxFilled) {
         rect.style.fill = col
           ? `color-mix(in srgb, ${col} 14%, var(--background-secondary))`
@@ -1172,8 +1185,9 @@ export class MindAtlasView extends ItemView {
     text.style.fontSize = `${f.px}px`;
     text.style.fontWeight = String(f.weight);
     text.style.fontFamily = f.family;
-    if (isRoot && s.showBoxes) text.style.fill = "var(--text-on-accent)";
-    else if (n.side !== -1 && this.colorOf(n)) text.style.fill = this.colorOf(n)!;
+    if (n.side === -1) text.style.fill = "#fff";
+    else if (isRoot && s.showBoxes) text.style.fill = "var(--text-on-accent)";
+    else if (this.colorOf(n)) text.style.fill = this.colorOf(n)!;
     n.labelLines.forEach((line, index) => {
       const span = text.createSvg("tspan");
       span.setAttribute("x", "0");
@@ -1202,7 +1216,7 @@ export class MindAtlasView extends ItemView {
       glyph.setAttribute("height", String(size));
       glyph.setAttribute("class", "mind-atlas-badge");
       // Same color as the node's title.
-      glyph.style.color = n.side === -1 || n.floating ? "var(--text-faint)" : this.colorOf(n) ?? "var(--text-normal)";
+      glyph.style.color = n.side === -1 ? "#fff" : n.floating ? "var(--text-faint)" : this.colorOf(n) ?? "var(--text-normal)";
       g.appendChild(glyph);
     }
 
@@ -1602,6 +1616,10 @@ export class MindAtlasView extends ItemView {
     return this.graph.nodes.find((n) => n.file.path === path) ?? null;
   }
 
+  private selectedNode(): MapNode | null {
+    return this.nodeByPath(this.selectedPath);
+  }
+
   private menuNode() {
     return this.nodeByPath(this.menuPath);
   }
@@ -1855,6 +1873,23 @@ export class MindAtlasView extends ItemView {
     if (name) await this.renameFile(n.file, name);
   }
 
+  private async renameMapTitle(n: MapNode) {
+    this.setTool("select");
+    const title = await this.promptInline({ x: n.x, y: n.y }, n.depth, "center", undefined, n.title);
+    if (title) await this.setMapTitle(n, title);
+  }
+
+  /** Save a display-only title; the filename remains untouched. */
+  private async setMapTitle(n: MapNode, raw: string) {
+    const title = raw.trim();
+    if (!title || title === n.file.basename) {
+      await this.app.fileManager.processFrontMatter(n.file, (fm) => delete fm["mindmap-title"]);
+    } else {
+      await this.app.fileManager.processFrontMatter(n.file, (fm) => { fm["mindmap-title"] = title; });
+    }
+    this.scheduleRefresh();
+  }
+
   /** Rename a note (its title is its file name) and carry the map's per-note state along. */
   private async renameFile(file: TFile, raw: string) {
     const title = sanitizeTitle(raw);
@@ -1926,7 +1961,8 @@ export class MindAtlasView extends ItemView {
     const g = this.graph;
     if (!g) return;
     const menu = new Menu();
-    menu.addItem((i) => i.setTitle("Rename").setIcon(fi("pencil")).onClick(() => void this.renameNode(n)));
+    menu.addItem((i) => i.setTitle("Rename file").setIcon(fi("file-pen-line")).onClick(() => void this.renameNode(n)));
+    menu.addItem((i) => i.setTitle("Set map title").setIcon(fi("type")).onClick(() => void this.renameMapTitle(n)));
     if (n !== g.root) {
       menu.addItem((i) => i.setTitle("Make center of map").setIcon(fi("locate-fixed")).onClick(() => void this.setRoot(n.file)));
     }

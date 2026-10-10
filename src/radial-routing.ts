@@ -21,6 +21,7 @@ export interface CrossLinkInput extends Omit<RouteLine, "points"> {
   key: string;
   start: Pt;
   end: Pt;
+  strict?: boolean;
 }
 
 export interface CrossLinkRoute {
@@ -63,7 +64,7 @@ export function routeCrossLinks(
     const len = distance(link.start, link.end) || 1;
     const bend = Math.max(24, Math.min(90, len * 0.18));
     const maxBend = Math.max(bend, Math.min(320, len * 0.6));
-    const candidates = [...new Set([0, bend, -bend, maxBend, -maxBend])];
+    const candidates = [...new Set([0, bend, -bend, bend * 2, -bend * 2, maxBend, -maxBend])];
     let best: CrossLinkRoute | null = null;
     let bestCost = Infinity;
 
@@ -71,11 +72,13 @@ export function routeCrossLinks(
       const control = controlPoint(link.start, link.end, amount);
       const points = sampleQuadratic(link.start, control, link.end);
       const pathBounds = boundsOf(points);
+      const collisions = boxCollisions(points, pathBounds, boxes, link.source, link.target);
+      const conflicts = lineConflicts(points, pathBounds, lines, link.source, link.target);
       const cost =
         routeLength(points) * 0.04 +
         Math.abs(amount) * 0.08 +
-        boxCollisions(points, pathBounds, boxes, link.source, link.target) * 10000 +
-        lineConflicts(points, pathBounds, lines, link.source, link.target);
+        collisions * 1000000 +
+        conflicts * (link.strict ? 1000 : 1);
       if (cost < bestCost) {
         bestCost = cost;
         best = { control, points };

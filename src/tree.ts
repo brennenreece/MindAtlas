@@ -179,9 +179,9 @@ export async function buildGraph(
     const meta = readMeta(app, file);
     return {
       file,
-      title: file.basename,
-      label: file.basename,
-      labelLines: [file.basename],
+      title: meta.title || file.basename,
+      label: meta.title || file.basename,
+      labelLines: [meta.title || file.basename],
       children: [],
       side,
       depth,
@@ -198,7 +198,8 @@ export async function buildGraph(
       branch,
       collapsed: side !== 0 && collapsed.has(file.path),
       hidden: 0,
-      color: meta.color ?? parent?.color,
+      // Presentation belongs to the note, never to its current placement parent.
+      color: meta.color,
       icon: meta.icon,
       iconName: meta.iconName,
     };
@@ -340,10 +341,12 @@ export async function buildGraph(
 const COLOR_NAMES = /^(#[0-9a-f]{3,8}|[a-z]+|(rgb|hsl)a?\([^)]*\))$/i;
 
 /** Per-note presentation hints from frontmatter. */
-function readMeta(app: App, f: TFile): { color?: string; icon?: string; iconName?: string } {
+function readMeta(app: App, f: TFile): { title?: string; color?: string; icon?: string; iconName?: string } {
   const fm = app.metadataCache.getFileCache(f)?.frontmatter;
   if (!fm) return {};
   const out: ReturnType<typeof readMeta> = {};
+  const title = fm["mindmap-title"];
+  if (typeof title === "string" && title.trim()) out.title = title.trim();
   const c = fm["mindmap-color"];
   if (typeof c === "string" && COLOR_NAMES.test(c.trim())) out.color = c.trim();
   const i = fm["mindmap-icon"];

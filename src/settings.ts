@@ -26,7 +26,7 @@ export interface MindAtlasSettings {
   maxNodes: number;
   iconSize: number;
   showConnections: boolean;
-  editorPosition: "bottom" | "right";
+  editorPosition: "bottom" | "right" | "pane";
   defaultDepth: number;
   // Gap in px between linked nodes.
   spacing: number;
@@ -101,7 +101,7 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
         : d.crossLinks,
     layoutMode: s.layoutMode === "tree" ? "tree" : "radial",
     branchColors: bool(s.branchColors, d.branchColors),
-    editorPosition: s.editorPosition === "right" ? "right" : "bottom",
+    editorPosition: s.editorPosition === "right" || s.editorPosition === "pane" ? s.editorPosition : "bottom",
     showConnections: s.showConnections === true,
     iconSize: num(s.iconSize, d.iconSize, 10, 80),
     maxNodes: num(s.maxNodes, d.maxNodes, 50, 2000),
@@ -241,10 +241,10 @@ export class MindAtlasSettingTab extends PluginSettingTab {
       .setDesc("Where the note editor sits relative to the map. Drag the divider to resize it.")
       .addDropdown((d) =>
         d
-          .addOptions({ bottom: "Below the map", right: "Right of the map" })
+          .addOptions({ bottom: "Below the map", right: "Right of the map", pane: "Open in new pane" })
           .setValue(s.editorPosition)
           .onChange(async (v) => {
-            s.editorPosition = v === "right" ? "right" : "bottom";
+            s.editorPosition = v === "right" || v === "pane" ? v : "bottom";
             await save();
           })
       );

@@ -69,12 +69,10 @@
 .mind-atlas-menu button.is-hidden { display: none; }
 .mind-atlas-name-input { width: 100%; margin-bottom: 12px; }
 
-.is-dragging-node .mind-atlas-node:not(.is-dragged) { opacity: 0.35; }
-.is-dragging-node .mind-atlas-node.is-drop-target, .is-dragging-node .mind-atlas-node.is-drop-invalid { opacity: 1; }
-.is-dragging-node .mind-atlas-edge, .is-dragging-node .mind-atlas-cross, .is-dragging-node .mind-atlas-edge-fill, .is-dragging-node .mind-atlas-head { opacity: 0.25; }
-.mind-atlas-node.is-dragged { opacity: 0.8; }
+.mind-atlas-node.is-dragged { filter: drop-shadow(0 0 8px var(--interactive-accent)); transform-box: fill-box; transform-origin: center; animation: mind-atlas-grab 140ms ease-out forwards; }
 .mind-atlas-node.is-drop-invalid rect { stroke: var(--text-error); stroke-width: 3; }
 .is-dragging-node .mind-atlas-node { cursor: grabbing; }
+@keyframes mind-atlas-grab { from { transform: scale(1); } to { transform: scale(1.15); } }
 .mind-atlas-drag-label { position: absolute; z-index: 4; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: 4px; background: var(--interactive-accent); color: var(--text-on-accent); font-size: 12px; white-space: nowrap; pointer-events: none; }
 .mind-atlas-drag-label.is-invalid { background: var(--text-error); color: #fff; }
 
@@ -101,6 +99,7 @@
 .mind-atlas-container.is-editor-right .mind-atlas-map { min-width: 160px; min-height: 0; }
 .mind-atlas-container.is-editor-right .mind-atlas-divider { flex: 0 0 6px; cursor: col-resize; }
 .mind-atlas-container.is-editor-right .mind-atlas-editor-pane { min-width: 200px; min-height: 0; height: auto; }
+.mind-atlas-editor-pane.is-hidden { display: none; }
 
 .mind-atlas-badge { stroke: currentColor; fill: none; pointer-events: none; }
 .mind-atlas-icons { display: none; position: absolute; top: 100%; left: 0; margin-top: 4px; padding: 6px; gap: 2px; width: 260px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 6px; max-height: 260px; overflow-y: auto; }

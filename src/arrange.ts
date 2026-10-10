@@ -97,6 +97,34 @@ export function applyOffsets(
       n.gy = f.y;
     }
   }
+  // Saved offsets and floating notes are user-controlled, but never let them
+  // leave unreadable overlapping boxes in the rendered map.
+  resolveFinalOverlaps(root, nodes, Math.max(8, Math.min(24, 10)));
+}
+
+function resolveFinalOverlaps(root: MapNode, nodes: MapNode[], gap: number) {
+  for (let pass = 0; pass < 100; pass++) {
+    let changed = false;
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      const ox = (a.w + b.w) / 2 + gap - Math.abs(b.gx - a.gx);
+      const oy = (a.h + b.h) / 2 + gap - Math.abs(b.gy - a.gy);
+      if (ox <= 0 || oy <= 0) continue;
+      changed = true;
+      const horizontal = ox < oy;
+      const amount = (horizontal ? ox : oy) / 2 + 0.5;
+      const sign = horizontal ? Math.sign(b.gx - a.gx || 1) : Math.sign(b.gy - a.gy || 1);
+      if (a !== root) {
+        if (horizontal) a.gx -= sign * amount;
+        else a.gy -= sign * amount;
+      }
+      if (b !== root) {
+        if (horizontal) b.gx += sign * amount;
+        else b.gy += sign * amount;
+      }
+    }
+    if (!changed) break;
+  }
 }
 
 interface Box extends Pt {
@@ -427,6 +455,51 @@ function settleRadial(
     }
   }
 
+  for (const n of nodes) {
+    const p = position.get(n)!;
+    n.bx = p.x;
+    n.by = p.y;
+  }
+
+  // The force pass favors compactness; finish with hard separation so automatic
+  // positions never leave two node boxes touching or overlapping.
+  separateBoxes(root, nodes, position, sectors, clearance);
+}
+
+function separateBoxes(
+  root: MapNode,
+  nodes: MapNode[],
+  position: Map<MapNode, Pt>,
+  sectors: Map<MapNode, [number, number]>,
+  clearance: number
+) {
+  const all = [root, ...nodes];
+  for (let pass = 0; pass < 80; pass++) {
+    let changed = false;
+    for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
+      const a = all[i], b = all[j];
+      const pa = position.get(a)!, pb = position.get(b)!;
+      const ox = (a.w + b.w) / 2 + clearance - Math.abs(pb.x - pa.x);
+      const oy = (a.h + b.h) / 2 + clearance - Math.abs(pb.y - pa.y);
+      if (ox <= 0 || oy <= 0) continue;
+      changed = true;
+      const horizontal = ox < oy;
+      const sign = horizontal ? Math.sign(pb.x - pa.x || 1) : Math.sign(pb.y - pa.y || 1);
+      const amount = (horizontal ? ox : oy) / 2 + 0.5;
+      for (const [n, p, direction] of [[a, pa, -1], [b, pb, 1]] as const) {
+        if (n === root) continue;
+        let x = p.x + (horizontal ? sign * amount * direction : 0);
+        let y = p.y + (!horizontal ? sign * amount * direction : 0);
+        const [start, end] = sectors.get(n)!;
+        const theta = clampToSector(Math.atan2(y, x), start, end);
+        const radius = Math.hypot(x, y);
+        x = Math.cos(theta) * radius;
+        y = Math.sin(theta) * radius;
+        position.set(n, { x, y });
+      }
+    }
+    if (!changed) break;
+  }
   for (const n of nodes) {
     const p = position.get(n)!;
     n.bx = p.x;
