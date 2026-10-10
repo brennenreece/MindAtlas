@@ -40,8 +40,7 @@ export interface StructuralBranchInput {
 }
 
 export interface StructuralBranchRoute {
-  controls: [Pt, Pt, Pt, Pt];
-  /** A dense representation used only for collision checks and subsequent routes. */
+  /** Exit, corridor, and approach points; rendered with rounded transitions. */
   points: Pt[];
 }
 
@@ -109,9 +108,9 @@ export function routeCrossLinks(
 /**
  * The structural map is intentionally not a general-purpose path router.
  * Layout has already assigned every branch a territory and each parent has
- * given its children a separate boundary lane.  Here we select the smallest
- * single Bézier sweep that stays clear of protected note/title boxes and of
- * earlier branch corridors.  If the unbent sweep is clear it always wins.
+ * given its children a separate boundary lane. Here we select the shortest
+ * exit/corridor/approach route that stays clear of protected note/title boxes
+ * and earlier branch corridors. Its corners are rounded only at render time.
  */
 export function routeStructuralBranches(
   branches: StructuralBranchInput[],
@@ -123,19 +122,16 @@ export function routeStructuralBranches(
   for (const branch of branches) {
     let best: StructuralBranchRoute | null = null;
     let bestCost = Infinity;
-    for (const controls of structuralCandidates(branch)) {
-      const points = sampleCubic(...controls, 28);
+    for (const points of structuralCandidates(branch)) {
       const bounds = boundsOf(points);
       const boxHits = boxCollisions(points, bounds, boxes, branch.source, branch.target);
       const lineHits = lineConflicts(points, bounds, occupied, branch.source, branch.target);
-      const bend = Math.abs(controls[1].x - branch.start.p.x) + Math.abs(controls[1].y - branch.start.p.y) +
-        Math.abs(controls[2].x - branch.end.p.x) + Math.abs(controls[2].y - branch.end.p.y);
       // Notes and titles are inviolable. Structural branches also do not cross
       // each other: the length/bend preference is only a tie breaker.
-      const cost = boxHits * 1_000_000_000 + lineHits * 1_000_000 + routeLength(points) + bend * 0.01;
+      const cost = boxHits * 1_000_000_000 + lineHits * 1_000_000 + routeLength(points);
       if (cost < bestCost) {
         bestCost = cost;
-        best = { controls, points };
+        best = { points };
       }
     }
     if (best) {
@@ -146,30 +142,33 @@ export function routeStructuralBranches(
   return routes;
 }
 
-function structuralCandidates(branch: StructuralBranchInput): [Pt, Pt, Pt, Pt][] {
+function structuralCandidates(branch: StructuralBranchInput): Pt[][] {
   const p1 = branch.start.p;
   const p2 = branch.end.p;
   const distance = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
   const direct = { x: (p2.x - p1.x) / distance, y: (p2.y - p1.y) / distance };
-  // A genuinely aligned branch offers a straight mind-map stroke first.  It
-  // remains a candidate rather than an unconditional answer: a title or note
-  // between its ends must still be protected.
   const aligned = dot(branch.start.dir, direct) > 0.985 && dot(branch.end.dir, direct) < -0.985;
-  // Keep the visible bend restrained. It is enough to make a graceful turn,
-  // but cannot produce the theatrical loops of the old router.
-  const handle = Math.max(20, Math.min(76, distance * 0.32));
-  const normal = { x: -(p2.y - p1.y) / distance, y: (p2.x - p1.x) / distance };
-  const bends = [0, 10, -10, 22, -22, 38, -38, 56, -56, 78, -78];
-  const candidates: [Pt, Pt, Pt, Pt][] = bends.map((bend): [Pt, Pt, Pt, Pt] => {
-    return [
-      p1,
-      { x: p1.x + branch.start.dir.x * handle + normal.x * bend, y: p1.y + branch.start.dir.y * handle + normal.y * bend },
-      { x: p2.x + branch.end.dir.x * handle + normal.x * bend, y: p2.y + branch.end.dir.y * handle + normal.y * bend },
-      p2,
-    ];
-  });
-  const straight: [Pt, Pt, Pt, Pt] = [p1, p1, p2, p2];
-  return aligned ? [straight, ...candidates] : candidates;
+  const routes: Pt[][] = aligned ? [[p1, p2]] : [];
+  // Grow a route outward only when its smallest lane is blocked. These are
+  // actual lanes, not arbitrary curve bends, so parallel siblings stay apart.
+  for (const reach of [20, 32, 48, 68, 92, 120, 156]) {
+    const exit = { x: p1.x + branch.start.dir.x * reach, y: p1.y + branch.start.dir.y * reach };
+    const approach = { x: p2.x + branch.end.dir.x * reach, y: p2.y + branch.end.dir.y * reach };
+    const horizontal = Math.abs(branch.start.dir.x) >= Math.abs(branch.start.dir.y);
+    const middle = horizontal ? (p1.y + p2.y) / 2 : (p1.x + p2.x) / 2;
+    const first = horizontal
+      ? [p1, exit, { x: exit.x, y: middle + reach }, { x: approach.x, y: middle + reach }, approach, p2]
+      : [p1, exit, { x: middle + reach, y: exit.y }, { x: middle + reach, y: approach.y }, approach, p2];
+    const second = horizontal
+      ? [p1, exit, { x: exit.x, y: middle - reach }, { x: approach.x, y: middle - reach }, approach, p2]
+      : [p1, exit, { x: middle - reach, y: exit.y }, { x: middle - reach, y: approach.y }, approach, p2];
+    routes.push(compactRoute(first), compactRoute(second));
+  }
+  return routes;
+}
+
+function compactRoute(points: Pt[]): Pt[] {
+  return points.filter((p, i) => i === 0 || Math.hypot(p.x - points[i - 1].x, p.y - points[i - 1].y) > 0.5);
 }
 
 function dot(a: Pt, b: Pt) {

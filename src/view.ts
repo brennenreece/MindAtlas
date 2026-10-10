@@ -1111,12 +1111,11 @@ export class MindAtlasView extends ItemView {
         return;
       }
       const branch = branches.get(this.edgeEls[i].key);
-      const controls = branch?.controls ?? [a.p, a.p, b.p, b.p];
-      const [p1, c1, c2, p2] = controls;
+      const points = branch?.points ?? [a.p, b.p];
       const sz: [number, number] = [this.fontOf(edge.from).px / 18, this.fontOf(edge.to).px / 18];
       const structuralPath = s.lineStyle === "organic"
-        ? cubicRibbonPath(controls, s.lineWidth, k, sz)
-        : `M${p1.x},${p1.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p2.x},${p2.y}`;
+        ? roundedRibbonPath(points, s.lineWidth, k, sz)
+        : roundedRoutePath(points, 14);
       el.setAttribute(
         "d",
         structuralPath
@@ -1137,9 +1136,9 @@ export class MindAtlasView extends ItemView {
         }
         let dir: Pt;
         if (idx === 0) {
-          dir = routeUnit(c1, a.p);
+          dir = routeUnit(points[1] ?? b.p, a.p);
         } else if (idx === 1) {
-          dir = routeUnit(c2, b.p);
+          dir = routeUnit(points[points.length - 2] ?? a.p, b.p);
         } else if (style === "straight") {
           const len = Math.hypot(end.p.x - other.p.x, end.p.y - other.p.y) || 1;
           dir = { x: (end.p.x - other.p.x) / len, y: (end.p.y - other.p.y) / len };
@@ -2575,26 +2574,36 @@ function roundedRoutePath(points: Pt[], radius = 12) {
   return `${d} L${end.x},${end.y}`;
 }
 
-/** A tapered version of a cubic branch for the optional organic theme. */
-function cubicRibbonPath([p1, c1, c2, p2]: [Pt, Pt, Pt, Pt], lineWidth: number, widthK: number, sizeK: [number, number]): string {
+/** Expand the same rounded structural route into a tapered organic ribbon. */
+function roundedRibbonPath(points: Pt[], lineWidth: number, widthK: number, sizeK: [number, number]): string {
+  const radius = 14;
+  const samples: Pt[] = [points[0]];
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = points[i - 1], corner = points[i], next = points[i + 1];
+    const inLen = Math.hypot(corner.x - prev.x, corner.y - prev.y) || 1;
+    const outLen = Math.hypot(next.x - corner.x, next.y - corner.y) || 1;
+    const r = Math.min(radius, inLen / 2, outLen / 2);
+    const before = { x: corner.x + (prev.x - corner.x) * r / inLen, y: corner.y + (prev.y - corner.y) * r / inLen };
+    const after = { x: corner.x + (next.x - corner.x) * r / outLen, y: corner.y + (next.y - corner.y) * r / outLen };
+    samples.push(before);
+    for (let step = 1; step <= 5; step++) {
+      const t = step / 5, u = 1 - t;
+      samples.push({ x: u * u * before.x + 2 * u * t * corner.x + t * t * after.x, y: u * u * before.y + 2 * u * t * corner.y + t * t * after.y });
+    }
+  }
+  samples.push(points[points.length - 1]);
+  const left: Pt[] = [], right: Pt[] = [];
   const w0 = (lineWidth * 2.6 * widthK * sizeK[0]) / 2;
   const w1 = (lineWidth * 0.5 * widthK * Math.min(sizeK[0], sizeK[1])) / 2;
-  const left: Pt[] = [];
-  const right: Pt[] = [];
-  for (let i = 0; i <= 20; i++) {
-    const t = i / 20;
-    const u = 1 - t;
-    const x = u * u * u * p1.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p2.x;
-    const y = u * u * u * p1.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p2.y;
-    let tx = 3 * u * u * (c1.x - p1.x) + 6 * u * t * (c2.x - c1.x) + 3 * t * t * (p2.x - c2.x);
-    let ty = 3 * u * u * (c1.y - p1.y) + 6 * u * t * (c2.y - c1.y) + 3 * t * t * (p2.y - c2.y);
-    const len = Math.hypot(tx, ty) || 1;
-    tx /= len;
-    ty /= len;
-    const halfWidth = w0 + (w1 - w0) * (1 - Math.pow(1 - t, 1.5));
-    left.push({ x: x - ty * halfWidth, y: y + tx * halfWidth });
-    right.push({ x: x + ty * halfWidth, y: y - tx * halfWidth });
-  }
+  samples.forEach((p, i) => {
+    const prev = samples[Math.max(0, i - 1)], next = samples[Math.min(samples.length - 1, i + 1)];
+    const length = Math.hypot(next.x - prev.x, next.y - prev.y) || 1;
+    const tx = (next.x - prev.x) / length, ty = (next.y - prev.y) / length;
+    const t = i / Math.max(1, samples.length - 1);
+    const hw = w0 + (w1 - w0) * (1 - Math.pow(1 - t, 1.5));
+    left.push({ x: p.x - ty * hw, y: p.y + tx * hw });
+    right.push({ x: p.x + ty * hw, y: p.y - tx * hw });
+  });
   return "M" + [...left, ...right.reverse()].map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" L") + " Z";
 }
 

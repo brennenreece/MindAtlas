@@ -213,7 +213,7 @@ test("cross-link routing bends around nodes and existing connectors", () => {
   assert.ok(route.control.y < 0 || route.control.y > 0);
 });
 
-test("structural branches remain smooth while routing around a note", () => {
+test("structural branches use a clear lane around a note", () => {
   const boxes = [
     { id: "parent", x: -150, y: 0, w: 80, h: 36 },
     { id: "child", x: 150, y: 0, w: 80, h: 36 },
@@ -229,9 +229,8 @@ test("structural branches remain smooth while routing around a note", () => {
 
   assert.ok(route);
   assert.equal(route.points.some((p, i) => i > 0 && segmentHitsBox(route.points[i - 1], p, boxes[2])), false);
-  const [, c1, c2] = route.controls;
-  assert.notEqual(c1.y, 0, "the route should gracefully sweep around the title");
-  assert.notEqual(c2.y, 0, "the route should gracefully sweep around the title");
+  assert.ok(route.points.length >= 4, "a blocked branch uses exit, corridor, and approach lanes");
+  assert.ok(route.points.some((p) => p.y !== 0), "the route leaves the title's horizontal corridor");
 });
 
 test("aligned structural branches remain straight", () => {
@@ -247,7 +246,7 @@ test("aligned structural branches remain straight", () => {
     end: radialBoundaryAnchor(boxes[1], boxes[0]),
   }], boxes).get("aligned");
   assert.ok(route);
-  assert.deepEqual(route.controls, [route.controls[0], route.controls[0], route.controls[3], route.controls[3]]);
+  assert.equal(route.points.length, 2);
 });
 
 test("cross-link routing chooses the side that clears an existing edge", () => {
