@@ -929,7 +929,7 @@ export class MindAtlasView extends ItemView {
     // Lines touching a backlink note are grayed out.
     const gray = edge.from.side === -1 || edge.to.side === -1 || !!edge.from.floating || !!edge.to.floating;
     const el = layer.createSvg("path");
-    const filled = !cross && s.lineStyle === "organic";
+    const filled = false;
     el.addClass(cross ? "mind-atlas-cross" : filled ? "mind-atlas-edge-fill" : "mind-atlas-edge");
     if (gray) el.addClass("is-back");
     const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
@@ -1131,42 +1131,26 @@ export class MindAtlasView extends ItemView {
       const [a, b] = anchors[i];
       const points = routed.get(key)?.points ?? [a.p, b.p];
       const direct = points.length <= 2;
-      const style = cross && s.lineStyle === "organic" ? "curved" : s.lineStyle;
       const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
-      // Unobstructed lines use the classic curves (organic ribbon, thick at the
-      // parent); lines blocked by a note follow a smooth detour instead.
-      const ribbon = !cross && direct && s.lineStyle === "organic";
-      let d: string;
-      let bow: Pt | null = null;
-      if (!direct) d = smoothRoutePath(points);
-      else if (cross) {
-        const dx = b.p.x - a.p.x;
-        const dy = b.p.y - a.p.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const amt = Math.min(70, len * 0.22);
-        bow = { x: (a.p.x + b.p.x) / 2 - (dy / len) * amt, y: (a.p.y + b.p.y) / 2 + (dx / len) * amt };
-        d = `M${a.p.x},${a.p.y} Q${bow.x},${bow.y} ${b.p.x},${b.p.y}`;
-      } else {
-        const sz: [number, number] = [this.fontOf(edge.from).px / 18, this.fontOf(edge.to).px / 18];
-        d = this.linePath(a, b, style, k, sz);
-      }
-      el.toggleClass("mind-atlas-edge-fill", ribbon);
-      el.toggleClass("mind-atlas-edge", !cross && !ribbon);
+      // Straight when the way is clear; otherwise a gentle curve around the obstacle.
+      const d = direct ? `M${a.p.x},${a.p.y} L${b.p.x},${b.p.y}` : smoothRoutePath(points);
+      el.toggleClass("mind-atlas-edge-fill", false);
+      el.toggleClass("mind-atlas-edge", !cross);
       const col = el.dataset.color;
-      if (col && !cross) {
-        el.style.fill = ribbon ? col : "";
-        el.style.stroke = ribbon ? "" : col;
-      } else if (col) el.style.stroke = col;
-      if (!cross) el.style.strokeWidth = ribbon ? "" : String(s.lineWidth * k * 1.45);
+      if (col) {
+        el.style.fill = "";
+        el.style.stroke = col;
+      }
+      if (!cross) el.style.strokeWidth = String(s.lineWidth * k * 1.45);
       el.setAttribute("d", d);
-      hit.setAttribute("d", !direct || cross ? d : this.linePath(a, b, style === "organic" ? "curved" : style, k));
+      hit.setAttribute("d", d);
       // Only hierarchy lines carry an arrowhead, pointing parent -> child.
       heads[0].setAttribute("d", "");
       if (edge.kind !== "child") {
         heads[1].setAttribute("d", "");
         return;
       }
-      const dir = direct && style !== "straight" ? { x: -b.dir.x, y: -b.dir.y } : routeUnit(points[points.length - 2] ?? a.p, b.p);
+      const dir = routeUnit(points[points.length - 2] ?? a.p, b.p);
       heads[1].setAttribute("d", arrowHead(b.p, dir, 7 + s.lineWidth * 2 * k));
     });
   }
