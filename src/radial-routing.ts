@@ -30,20 +30,6 @@ export interface CrossLinkRoute {
   points: Pt[];
 }
 
-/** An ordered parent/child branch with reserved boundary lanes at both ends. */
-export interface StructuralBranchInput {
-  key: string;
-  source: string;
-  target: string;
-  start: RouteAnchor;
-  end: RouteAnchor;
-}
-
-export interface StructuralBranchRoute {
-  /** Exit, corridor, and approach points; rendered with rounded transitions. */
-  points: Pt[];
-}
-
 const SAMPLE_COUNT = 10;
 
 interface Bounds {
@@ -103,76 +89,6 @@ export function routeCrossLinks(
   }
 
   return routes;
-}
-
-/**
- * The structural map is intentionally not a general-purpose path router.
- * Layout has already assigned every branch a territory and each parent has
- * given its children a separate boundary lane. Here we select the shortest
- * exit/corridor/approach route that stays clear of protected note/title boxes
- * and earlier branch corridors. Its corners are rounded only at render time.
- */
-export function routeStructuralBranches(
-  branches: StructuralBranchInput[],
-  boxes: RouteBox[]
-): Map<string, StructuralBranchRoute> {
-  const routes = new Map<string, StructuralBranchRoute>();
-  const occupied: IndexedLine[] = [];
-
-  for (const branch of branches) {
-    let best: StructuralBranchRoute | null = null;
-    let bestCost = Infinity;
-    for (const points of structuralCandidates(branch)) {
-      const bounds = boundsOf(points);
-      const boxHits = boxCollisions(points, bounds, boxes, branch.source, branch.target);
-      const lineHits = lineConflicts(points, bounds, occupied, branch.source, branch.target);
-      // Notes and titles are inviolable. Structural branches also do not cross
-      // each other: the length/bend preference is only a tie breaker.
-      const cost = boxHits * 1_000_000_000 + lineHits * 1_000_000 + routeLength(points);
-      if (cost < bestCost) {
-        bestCost = cost;
-        best = { points };
-      }
-    }
-    if (best) {
-      routes.set(branch.key, best);
-      occupied.push(indexLine({ source: branch.source, target: branch.target, points: best.points }));
-    }
-  }
-  return routes;
-}
-
-function structuralCandidates(branch: StructuralBranchInput): Pt[][] {
-  const p1 = branch.start.p;
-  const p2 = branch.end.p;
-  const distance = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
-  const direct = { x: (p2.x - p1.x) / distance, y: (p2.y - p1.y) / distance };
-  const aligned = dot(branch.start.dir, direct) > 0.985 && dot(branch.end.dir, direct) < -0.985;
-  const routes: Pt[][] = aligned ? [[p1, p2]] : [];
-  // Grow a route outward only when its smallest lane is blocked. These are
-  // actual lanes, not arbitrary curve bends, so parallel siblings stay apart.
-  for (const reach of [20, 32, 48, 68, 92, 120, 156]) {
-    const exit = { x: p1.x + branch.start.dir.x * reach, y: p1.y + branch.start.dir.y * reach };
-    const approach = { x: p2.x + branch.end.dir.x * reach, y: p2.y + branch.end.dir.y * reach };
-    const horizontal = Math.abs(branch.start.dir.x) >= Math.abs(branch.start.dir.y);
-    const middle = horizontal ? (p1.y + p2.y) / 2 : (p1.x + p2.x) / 2;
-    const first = horizontal
-      ? [p1, exit, { x: exit.x, y: middle + reach }, { x: approach.x, y: middle + reach }, approach, p2]
-      : [p1, exit, { x: middle + reach, y: exit.y }, { x: middle + reach, y: approach.y }, approach, p2];
-    const second = horizontal
-      ? [p1, exit, { x: exit.x, y: middle - reach }, { x: approach.x, y: middle - reach }, approach, p2]
-      : [p1, exit, { x: middle - reach, y: exit.y }, { x: middle - reach, y: approach.y }, approach, p2];
-    routes.push(compactRoute(first), compactRoute(second));
-  }
-  return routes;
-}
-
-function compactRoute(points: Pt[]): Pt[] {
-  return points.filter((p, i) => i === 0 || Math.hypot(p.x - points[i - 1].x, p.y - points[i - 1].y) > 0.5);
-}
-
-function dot(a: Pt, b: Pt) {
-  return a.x * b.x + a.y * b.y;
 }
 
 function legacyCandidates(link: CrossLinkInput): Pt[][] {

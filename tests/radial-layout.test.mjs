@@ -15,7 +15,7 @@ const load = async (name) => {
 };
 
 const { arrange, RADIAL_PRESETS } = await load("arrange");
-const { cubicControls, radialBoundaryAnchor, routeStructuralBranches, routeCrossLinks, sampleCubic } = await load("radial-routing");
+const { radialBoundaryAnchor, routeCrossLinks } = await load("radial-routing");
 
 function node(path, w = 90, h = 30, side = 1) {
   return { file: { path }, w, h, side, bx: 0, by: 0 };
@@ -45,12 +45,12 @@ function segmentsCross(a, b, c, d) {
 }
 
 function countTreeCrossings(edges) {
-  const curves = edges.map((edge) => {
+  const lines = edges.map((edge) => {
     const from = { id: edge.from.file.path, x: edge.from.bx, y: edge.from.by, w: edge.from.w, h: edge.from.h };
     const to = { id: edge.to.file.path, x: edge.to.bx, y: edge.to.by, w: edge.to.w, h: edge.to.h };
     const a = radialBoundaryAnchor(from, to);
     const b = radialBoundaryAnchor(to, from);
-    return sampleCubic(...cubicControls(a, b, "curved"));
+    return [a.p, b.p];
   });
   let count = 0;
   for (let i = 0; i < edges.length; i++) {
@@ -58,9 +58,9 @@ function countTreeCrossings(edges) {
       const a = edges[i];
       const b = edges[j];
       if ([a.from, a.to].some((n) => n === b.from || n === b.to)) continue;
-      for (let ai = 1; ai < curves[i].length; ai++) {
-        for (let bi = 1; bi < curves[j].length; bi++) {
-          if (segmentsCross(curves[i][ai - 1], curves[i][ai], curves[j][bi - 1], curves[j][bi])) count++;
+      for (let ai = 1; ai < lines[i].length; ai++) {
+        for (let bi = 1; bi < lines[j].length; bi++) {
+          if (segmentsCross(lines[i][ai - 1], lines[i][ai], lines[j][bi - 1], lines[j][bi])) count++;
         }
       }
     }
@@ -69,18 +69,18 @@ function countTreeCrossings(edges) {
 }
 
 function treeEdgesHitOtherBoxes(edges, nodes) {
-  const curves = edges.map((edge) => {
+  const lines = edges.map((edge) => {
     const from = { id: edge.from.file.path, x: edge.from.bx, y: edge.from.by, w: edge.from.w, h: edge.from.h };
     const to = { id: edge.to.file.path, x: edge.to.bx, y: edge.to.by, w: edge.to.w, h: edge.to.h };
-    return sampleCubic(...cubicControls(radialBoundaryAnchor(from, to), radialBoundaryAnchor(to, from), "curved"));
+    return [radialBoundaryAnchor(from, to).p, radialBoundaryAnchor(to, from).p];
   });
   let hits = 0;
   for (let i = 0; i < edges.length; i++) {
     for (const node of nodes) {
       if (node === edges[i].from || node === edges[i].to) continue;
       const box = { x: node.bx, y: node.by, w: node.w, h: node.h };
-      for (let j = 1; j < curves[i].length; j++) {
-        if (segmentHitsBox(curves[i][j - 1], curves[i][j], box)) {
+      for (let j = 1; j < lines[i].length; j++) {
+        if (segmentHitsBox(lines[i][j - 1], lines[i][j], box)) {
           hits++;
           break;
         }
@@ -211,42 +211,6 @@ test("cross-link routing bends around nodes and existing connectors", () => {
   assert.ok(route);
   assert.ok(route.points.every((p) => Math.abs(p.x) > 34 || Math.abs(p.y) > 42));
   assert.ok(route.control.y < 0 || route.control.y > 0);
-});
-
-test("structural branches use a clear lane around a note", () => {
-  const boxes = [
-    { id: "parent", x: -150, y: 0, w: 80, h: 36 },
-    { id: "child", x: 150, y: 0, w: 80, h: 36 },
-    { id: "title", x: 0, y: 0, w: 86, h: 56 },
-  ];
-  const route = routeStructuralBranches([{
-    key: "branch",
-    source: "parent",
-    target: "child",
-    start: radialBoundaryAnchor(boxes[0], boxes[1]),
-    end: radialBoundaryAnchor(boxes[1], boxes[0]),
-  }], boxes).get("branch");
-
-  assert.ok(route);
-  assert.equal(route.points.some((p, i) => i > 0 && segmentHitsBox(route.points[i - 1], p, boxes[2])), false);
-  assert.ok(route.points.length >= 4, "a blocked branch uses exit, corridor, and approach lanes");
-  assert.ok(route.points.some((p) => p.y !== 0), "the route leaves the title's horizontal corridor");
-});
-
-test("aligned structural branches remain straight", () => {
-  const boxes = [
-    { id: "parent", x: -120, y: 0, w: 80, h: 36 },
-    { id: "child", x: 120, y: 0, w: 80, h: 36 },
-  ];
-  const route = routeStructuralBranches([{
-    key: "aligned",
-    source: "parent",
-    target: "child",
-    start: radialBoundaryAnchor(boxes[0], boxes[1]),
-    end: radialBoundaryAnchor(boxes[1], boxes[0]),
-  }], boxes).get("aligned");
-  assert.ok(route);
-  assert.equal(route.points.length, 2);
 });
 
 test("cross-link routing chooses the side that clears an existing edge", () => {

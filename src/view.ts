@@ -12,7 +12,6 @@ import { buildGraph, Edge, MapGraph, MapNode } from "./tree";
 import {
   cubicControls as computeCubicControls,
   radialBoundaryAnchor,
-  routeStructuralBranches,
   routeCrossLinks as findCrossLinkRoutes,
 } from "./radial-routing";
 
@@ -1059,16 +1058,13 @@ export class MindAtlasView extends ItemView {
     this.positionInline();
     this.updatePreview();
     const boxes = this.graph?.nodes.map((n) => ({ id: n.file.path, x: n.x, y: n.y, w: n.w, h: n.h })) ?? [];
-    const branchInputs = this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
+    // Hierarchy is laid out as a tree, so its edges are deliberately simple:
+    // one direct stroke from a parent lane to a child lane. Connections are
+    // the only relationship type allowed to curve or route around obstacles.
+    const occupied = this.edgeEls.flatMap(({ edge, cross, el }, i) => {
       if (cross || el.hasClass("is-hidden")) return [];
-      const [start, end] = anchors[i];
-      return [{ key, source: edge.from.file.path, target: edge.to.file.path, start, end }];
-    });
-    const branches = routeStructuralBranches(branchInputs, boxes);
-    // Relationship links yield to the structural map, including its curves.
-    const occupied = branchInputs.flatMap((branch) => {
-      const route = branches.get(branch.key);
-      return route ? [{ source: branch.source, target: branch.target, points: route.points }] : [];
+      const [a, b] = anchors[i];
+      return [{ source: edge.from.file.path, target: edge.to.file.path, points: [a.p, b.p] }];
     });
     const links = routeCrossLinks
       ? this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
@@ -1110,12 +1106,8 @@ export class MindAtlasView extends ItemView {
         heads[1].setAttribute("d", edge.fwd ? arrowHead(b.p, unit(points[points.length - 2] ?? a.p, b.p), 8) : "");
         return;
       }
-      const branch = branches.get(this.edgeEls[i].key);
-      const points = branch?.points ?? [a.p, b.p];
-      const sz: [number, number] = [this.fontOf(edge.from).px / 18, this.fontOf(edge.to).px / 18];
-      const structuralPath = s.lineStyle === "organic"
-        ? roundedRibbonPath(points, s.lineWidth, k, sz)
-        : roundedRoutePath(points, 14);
+      const points = [a.p, b.p];
+      const structuralPath = `M${a.p.x},${a.p.y} L${b.p.x},${b.p.y}`;
       el.setAttribute(
         "d",
         structuralPath
@@ -2572,39 +2564,6 @@ function roundedRoutePath(points: Pt[], radius = 12) {
   }
   const end = points[points.length - 1];
   return `${d} L${end.x},${end.y}`;
-}
-
-/** Expand the same rounded structural route into a tapered organic ribbon. */
-function roundedRibbonPath(points: Pt[], lineWidth: number, widthK: number, sizeK: [number, number]): string {
-  const radius = 14;
-  const samples: Pt[] = [points[0]];
-  for (let i = 1; i < points.length - 1; i++) {
-    const prev = points[i - 1], corner = points[i], next = points[i + 1];
-    const inLen = Math.hypot(corner.x - prev.x, corner.y - prev.y) || 1;
-    const outLen = Math.hypot(next.x - corner.x, next.y - corner.y) || 1;
-    const r = Math.min(radius, inLen / 2, outLen / 2);
-    const before = { x: corner.x + (prev.x - corner.x) * r / inLen, y: corner.y + (prev.y - corner.y) * r / inLen };
-    const after = { x: corner.x + (next.x - corner.x) * r / outLen, y: corner.y + (next.y - corner.y) * r / outLen };
-    samples.push(before);
-    for (let step = 1; step <= 5; step++) {
-      const t = step / 5, u = 1 - t;
-      samples.push({ x: u * u * before.x + 2 * u * t * corner.x + t * t * after.x, y: u * u * before.y + 2 * u * t * corner.y + t * t * after.y });
-    }
-  }
-  samples.push(points[points.length - 1]);
-  const left: Pt[] = [], right: Pt[] = [];
-  const w0 = (lineWidth * 2.6 * widthK * sizeK[0]) / 2;
-  const w1 = (lineWidth * 0.5 * widthK * Math.min(sizeK[0], sizeK[1])) / 2;
-  samples.forEach((p, i) => {
-    const prev = samples[Math.max(0, i - 1)], next = samples[Math.min(samples.length - 1, i + 1)];
-    const length = Math.hypot(next.x - prev.x, next.y - prev.y) || 1;
-    const tx = (next.x - prev.x) / length, ty = (next.y - prev.y) / length;
-    const t = i / Math.max(1, samples.length - 1);
-    const hw = w0 + (w1 - w0) * (1 - Math.pow(1 - t, 1.5));
-    left.push({ x: p.x - ty * hw, y: p.y + tx * hw });
-    right.push({ x: p.x + ty * hw, y: p.y - tx * hw });
-  });
-  return "M" + [...left, ...right.reverse()].map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" L") + " Z";
 }
 
 function routeUnit(from: Pt, to: Pt): Pt {
