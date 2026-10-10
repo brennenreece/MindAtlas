@@ -34,7 +34,7 @@ const halfExtent = (n: MapNode, angle: number) =>
  *     both the previous ring and each other.
  * Sets `bx`/`by` (root at 0,0).
  */
-export function arrange(root: MapNode, edges: Edge[], spacing: number, crossLinks: Edge[] = []) {
+export function arrange(root: MapNode, edges: Edge[], spacing: number, crossLinks: Edge[] = [], minLine = 0) {
   const kids = childMap(edges);
   root.bx = 0;
   root.by = 0;
@@ -136,8 +136,11 @@ export function arrange(root: MapNode, edges: Edge[], spacing: number, crossLink
   for (const [n, l] of level) byLevel[l].push(n);
   const parentOf = new Map<MapNode, MapNode>();
   for (const [p, list] of kids) for (const c of list) parentOf.set(c, p);
-  const gap = Math.max(10, spacing);
-  const sideGap = Math.max(10, gap * 0.4);
+  // A labelled line must be long enough to carry its text.
+  const labelLen = new Map<MapNode, number>();
+  for (const e of edges) if (e.labelW) labelLen.set(e.to, e.labelW + 16);
+  const gap = Math.max(2, spacing * 0.6);
+  const sideGap = Math.max(4, gap * 0.4);
   const ringsFor = (inGroup: (n: MapNode) => boolean) => {
     const ring: number[] = [0];
     for (let l = 1; l <= maxLevel; l++) {
@@ -146,7 +149,7 @@ export function arrange(root: MapNode, edges: Edge[], spacing: number, crossLink
       for (const n of members) {
         const p = parentOf.get(n)!;
         const a = angle.get(n)!;
-        r = Math.max(r, ring[l - 1] + halfExtent(p, a) + halfExtent(n, a) + gap);
+        r = Math.max(r, ring[l - 1] + halfExtent(p, a) + halfExtent(n, a) + Math.max(gap, minLine, labelLen.get(n) ?? 0));
       }
       const siblings = [...members].sort((x, y) => angle.get(x)! - angle.get(y)!);
       for (let i = 0; i < siblings.length && siblings.length > 1; i++) {
@@ -231,7 +234,7 @@ export function applyOffsets(
   }
   // Saved offsets and floating notes are user-controlled, but never let them
   // leave unreadable overlapping boxes in the rendered map.
-  resolveFinalOverlaps(root, nodes, Math.max(8, Math.min(24, 10)));
+  resolveFinalOverlaps(root, nodes, 6);
 }
 
 export function resolveFinalOverlaps(root: MapNode, nodes: MapNode[], gap: number) {
@@ -293,5 +296,5 @@ export function relieveBlockers(root: MapNode, edges: Edge[], nodes: MapNode[], 
     }
     if (!moved) break;
   }
-  resolveFinalOverlaps(root, nodes, 10);
+  resolveFinalOverlaps(root, nodes, 6);
 }

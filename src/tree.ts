@@ -1,4 +1,5 @@
 import { App, TFile } from "obsidian";
+import { entryLabel } from "./note-format";
 
 export interface MapNode {
   file: TFile;
@@ -50,6 +51,14 @@ export interface Edge {
   fwd: boolean;
   back: boolean;
   kind: "child" | "connection";
+  // Remark written after the link in the note's Map block, and where it lives.
+  label?: string;
+  // Rendered width of the label, so the layout can keep the line at least that long.
+  labelW?: number;
+  // The note whose Map block lists the link; true when that is the `to` end (backlinks).
+  ownerIsTo?: boolean;
+  labelOwner?: TFile;
+  labelTarget?: TFile;
 }
 
 export interface MapGraph {
@@ -77,7 +86,6 @@ export interface GraphOptions {
 }
 
 const CHILDREN_HEADING = /^#{1,6}\s+children\s*$/i;
-const PARENTS_HEADING = /^#{1,6}\s+parents\s*$/i;
 const CONNECTIONS_HEADING = /^#{1,6}\s+connections\s*$/i;
 const ANY_HEADING = /^#{1,6}\s+\S/;
 const WIKILINK = /\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]/g;
@@ -108,12 +116,31 @@ export function parseChildLinks(content: string): string[] | null {
   return parseSectionLinks(content, CHILDREN_HEADING);
 }
 
-function parseParentLinks(content: string): string[] | null {
-  return parseSectionLinks(content, PARENTS_HEADING);
-}
-
 function parseConnectionLinks(content: string): string[] | null {
   return parseSectionLinks(content, CONNECTIONS_HEADING);
+}
+
+/** Remarks after list-item links under a Children/Connections heading, keyed by link text. */
+function parseSectionLabels(content: string, heading: RegExp): { name: string; label: string }[] {
+  const out: { name: string; label: string }[] = [];
+  let inSection = false;
+  let inFence = false;
+  for (const line of content.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    if (inFence) continue;
+    if (heading.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (inSection && ANY_HEADING.test(line)) inSection = false;
+    if (!inSection) continue;
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    if (!item) continue;
+    const m = new RegExp(WIKILINK.source).exec(item[1]);
+    if (!m) continue;
+    out.push({ name: m[1].trim(), label: entryLabel(item[1].slice(m.index + m[0].length)) });
+  }
+  return out;
 }
 
 function isIgnored(app: App, f: TFile): boolean {
@@ -285,7 +312,7 @@ export async function buildGraph(
           const c = makeNode(f, -1, d + 1, n);
           visited.set(f.path, c);
           (n === root ? backRoots : n.children).push(c);
-          treeEdges.push({ from: n, to: c, fwd: false, back: false, kind: "child" });
+          treeEdges.push({ from: n, to: c, fwd: false, back: false, kind: "child", ownerIsTo: true });
           next.push(c);
         }
       }
@@ -357,6 +384,29 @@ export async function buildGraph(
       drawn.add(key);
       crossLinks.push({ from: n, to: target, fwd: true, back: linked(target, n), kind: "connection" });
     }
+  }
+
+  const labelCache = new Map<string, Map<string, string>>();
+  const labelsFor = async (file: TFile, kind: Edge["kind"]) => {
+    const key = `${file.path}\n${kind}`;
+    let m = labelCache.get(key);
+    if (!m) {
+      m = new Map();
+      const heading = kind === "child" ? CHILDREN_HEADING : CONNECTIONS_HEADING;
+      for (const { name, label } of parseSectionLabels(await app.vault.cachedRead(file), heading)) {
+        const dest = app.metadataCache.getFirstLinkpathDest(name, file.path);
+        if (dest && label && !m.has(dest.path)) m.set(dest.path, label);
+      }
+      labelCache.set(key, m);
+    }
+    return m;
+  };
+  for (const e of [...treeEdges, ...crossLinks]) {
+    const owner = e.ownerIsTo ? e.to : e.from;
+    const other = e.ownerIsTo ? e.from : e.to;
+    e.labelOwner = owner.file;
+    e.labelTarget = other.file;
+    e.label = (await labelsFor(owner.file, e.kind)).get(other.file.path);
   }
 
   void backRoots;

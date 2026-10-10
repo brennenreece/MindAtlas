@@ -23,11 +23,12 @@ export interface MindAtlasSettings {
   maxNodes: number;
   iconSize: number;
   showConnections: boolean;
-  editorPosition: "bottom" | "right" | "pane";
   defaultDepth: number;
   // Gap in px between linked nodes.
   spacing: number;
+  minLine: number;
   childCap: number;
+  showLabels: boolean;
   collapseBacklinks: boolean;
   hasSeenGuide: boolean;
 }
@@ -42,17 +43,18 @@ export const DEFAULT_SETTINGS: MindAtlasSettings = {
   boxPadding: 12,
   boxColor: "",
   lineWidth: 1.5,
-  taperLines: false,
+  taperLines: true,
   lineColor: "",
   crossLinks: "always",
   branchColors: true,
   maxNodes: 400,
   iconSize: 28,
   showConnections: false,
-  editorPosition: "bottom",
   defaultDepth: 3,
-  spacing: 50,
+  spacing: 30,
+  minLine: 0,
   childCap: 8,
+  showLabels: true,
   collapseBacklinks: true,
   hasSeenGuide: false,
 };
@@ -95,12 +97,13 @@ export function sanitizeSettings(saved: any): MindAtlasSettings {
         ? "never"
         : d.crossLinks,
     branchColors: bool(s.branchColors, d.branchColors),
-    editorPosition: s.editorPosition === "right" || s.editorPosition === "pane" ? s.editorPosition : "bottom",
     showConnections: s.showConnections === true,
     iconSize: num(s.iconSize, d.iconSize, 10, 80),
     maxNodes: num(s.maxNodes, d.maxNodes, 50, 2000),
     defaultDepth: Math.round(num(s.defaultDepth, d.defaultDepth, 1, 6)),
     spacing: num(s.spacing, d.spacing, 0, 200),
+    minLine: num(s.minLine, d.minLine, 0, 300),
+    showLabels: s.showLabels !== false,
     childCap: num(s.childCap, d.childCap, 0, 100),
     collapseBacklinks: typeof s.collapseBacklinks === "boolean" ? s.collapseBacklinks : d.collapseBacklinks,
     hasSeenGuide: bool(s.hasSeenGuide, d.hasSeenGuide),
@@ -177,22 +180,13 @@ export class MindAtlasSettingTab extends PluginSettingTab {
     slider(containerEl, "Children shown per note", 0, 30, 1, () => s.childCap, (v) => (s.childCap = v)).setDesc(
       "Notes with more children show a “+N more” button instead. 0 shows everything."
     );
+    slider(containerEl, "Minimum line length", 0, 300, 5, () => s.minLine, (v) => (s.minLine = v)).setDesc(
+      "The shortest a parent-to-child line may be, measured between the edges of the two boxes."
+    );
     slider(containerEl, "Node spacing", 0, 200, 5, () => s.spacing, (v) => (s.spacing = v)).setDesc(
       "Gap between a note and its children. Branches arrange themselves around the center; you can also drag notes."
     );
 
-    new Setting(containerEl)
-      .setName("Editor position")
-      .setDesc("Where the note editor sits relative to the map. Drag the divider to resize it.")
-      .addDropdown((d) =>
-        d
-          .addOptions({ bottom: "Below the map", right: "Right of the map", pane: "Open in new pane" })
-          .setValue(s.editorPosition)
-          .onChange(async (v) => {
-            s.editorPosition = v === "right" || v === "pane" ? v : "bottom";
-            await save();
-          })
-      );
     slider(containerEl, "Maximum notes shown", 50, 2000, 50, () => s.maxNodes, (v) => (s.maxNodes = v)).setDesc(
       "Larger maps are slower. Notes beyond this are hidden behind a “…” marker."
     );
@@ -299,6 +293,15 @@ export class MindAtlasSettingTab extends PluginSettingTab {
         })
       );
     color("Line color", "Color of connecting lines.", () => s.lineColor, (v) => (s.lineColor = v));
+    new Setting(containerEl)
+      .setName("Show line labels")
+      .setDesc("Show the remark written after a link in a note's Map block (for example “- [[Note]] — why”) on its line.")
+      .addToggle((t) =>
+        t.setValue(s.showLabels).onChange(async (v) => {
+          s.showLabels = v;
+          await save();
+        })
+      );
     new Setting(containerEl)
       .setName("Collapse backlinks")
       .setDesc("Hide backlink notes behind a “+N backlinks” button until you click it.")

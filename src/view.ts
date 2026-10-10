@@ -1,11 +1,10 @@
-import { App, ItemView, Menu, Modal, Notice, Platform, Setting, TFile, WorkspaceLeaf } from "obsidian";
+import { App, ButtonComponent, ItemView, Menu, Modal, Notice, Platform, Setting, TFile, WorkspaceLeaf } from "obsidian";
 import type MindAtlasPlugin from "./main";
 import { fi, iconCategories, iconSvg, resolveIcon, setFeather as setIcon } from "./icons";
-import { NoteEditor } from "./editor";
-import { addConnection, addLink, createNote, removeChild, removeLinks, sanitizeTitle } from "./links";
+import { addConnection, addLink, createNote, findTidyIssues, fixTidyIssue, removeChild, removeLinks, sanitizeTitle, setLinkLabel, TidyIssue } from "./links";
 import { mapToSvg, saveToVault, svgToPng, toOutline } from "./export";
 import { NoteFinder } from "./finder";
-import { askChoice } from "./modals";
+import { askChoice, askText } from "./modals";
 import { applyOffsets, arrange, childMap, relieveBlockers } from "./layout";
 import { arrowHead, LineBox, Pt, routeLine } from "./lines";
 import { UndoStack } from "./undo";
@@ -37,8 +36,6 @@ interface ViewState extends Record<string, unknown> {
   extras?: string[];
   collapsed?: string[];
   expanded?: string[];
-  editorHidden?: boolean;
-  debug?: boolean;
 }
 
 const pairKey = (a: MapNode, b: MapNode) =>
@@ -57,17 +54,8 @@ export class MindAtlasView extends ItemView {
   private backlinkBox!: HTMLInputElement;
   private refreshTimer: number | null = null;
   private renderToken = 0;
-  private editor: NoteEditor | null = null;
   private editorLeaf: WorkspaceLeaf | null = null;
   private mapEl!: HTMLElement;
-  private editorPane!: HTMLElement;
-  private editorTitle!: HTMLInputElement;
-  private editorHeight = 280;
-  private editorWidth = 400;
-  private editorHidden = false;
-  private debug = true;
-  private debugBox?: HTMLInputElement;
-  private editorBox: HTMLInputElement | null = null;
   private helpPanel!: HTMLElement;
   private selectedPath: string | null = null;
   private graph: MapGraph | null = null;
@@ -89,6 +77,7 @@ export class MindAtlasView extends ItemView {
   private menuCenterBtn!: HTMLElement;
   private openIconPalette: () => void = () => {};
   private spreadSlider!: HTMLInputElement;
+  private minLineSlider!: HTMLInputElement;
   private undo = new UndoStack(this.app, () => this.scheduleRefresh());
   private nodeEls = new Map<MapNode, SVGGElement>();
   private edgeEls: {
@@ -98,6 +87,7 @@ export class MindAtlasView extends ItemView {
     gray: boolean;
     heads: [SVGPathElement, SVGPathElement];
     hit: SVGPathElement;
+    label: SVGGElement | null;
     key: string;
   }[] = [];
   private tool: Tool = "select";
@@ -129,7 +119,6 @@ export class MindAtlasView extends ItemView {
 
   /** Re-render after settings (font, sizes, boxes, lines) change. */
   refreshAppearance() {
-    this.applyEditorLayout();
     this.syncToolbar();
     void this.render(false);
   }
@@ -151,8 +140,6 @@ export class MindAtlasView extends ItemView {
     }
     if (typeof state?.depth === "number") this.depth = state.depth;
     if (typeof state?.backlinks === "boolean") this.backlinks = state.backlinks;
-    if (typeof state?.editorHidden === "boolean") this.editorHidden = state.editorHidden;
-    if (typeof state?.debug === "boolean") this.debug = state.debug;
     if (Array.isArray(state?.extras)) {
       this.extras = state.extras.filter((x): x is string => typeof x === "string");
     }
@@ -174,71 +161,9 @@ export class MindAtlasView extends ItemView {
       depth: this.depth,
       backlinks: this.backlinks,
       extras: this.extras,
-      editorHidden: this.editorHidden,
-      debug: this.debug,
       collapsed: [...this.collapsed],
       expanded: [...this.expanded],
     };
-  }
-
-  /**
-   * iOS scrolls overflow-hidden containers to reveal a focused field, which slides the map
-   * out of view when the keyboard opens. Nothing here should ever scroll, so undo it.
-   */
-  private keepInPlace() {
-    if (!Platform.isMobile) return;
-    const vv = window.visualViewport;
-    const el = this.contentEl;
-    const editing = () => {
-      const a = document.activeElement;
-      return a instanceof HTMLElement && el.contains(a) && (a.isContentEditable || a.tagName === "INPUT" || a.tagName === "TEXTAREA");
-    };
-    const dbg = el.createDiv("mind-atlas-debug");
-    const pane = () => el.querySelector<HTMLElement>(":scope > .mind-atlas-editor-pane");
-    const release = () => {
-      el.removeClass("is-keyboard");
-      el.style.height = "";
-      el.style.removeProperty("--ma-h");
-    };
-    // While the keyboard is up, Obsidian shrinks the leaf but the flex children collapse to
-    // zero height. Give the view and its children explicit pixel heights from the leaf.
-    const report = (kb: boolean, parentH: number) => {
-      const box = (e: Element | null) => {
-        if (!e) return "-";
-        const b = e.getBoundingClientRect();
-        return `${Math.round(b.width)}x${Math.round(b.height)}@${Math.round(b.top)}`;
-      };
-      const host = el.querySelector(".mind-atlas-editor");
-      const cm = el.querySelector(".cm-editor");
-      const sc = el.querySelector(".cm-scroller");
-      dbg.setText(`kb ${kb} leaf ${parentH} view ${box(el)} map ${box(this.mapEl)} pane ${box(pane())} host ${box(host)} cm ${box(cm)} scroller ${box(sc)} lines ${el.querySelectorAll(".cm-line").length} vv ${Math.round(vv?.height ?? 0)} win ${window.innerHeight}`);
-    };
-    const sync = () => {
-      if (!vv) return;
-      const kb = editing();
-      const parentH = el.parentElement?.clientHeight ?? 0;
-      if (!kb) {
-        release();
-        return report(kb, parentH);
-      }
-      if (parentH < 100) return report(kb, parentH);
-      el.addClass("is-keyboard");
-      el.style.height = `${parentH}px`;
-      el.style.setProperty("--ma-h", `${parentH}px`);
-      report(kb, parentH);
-    };
-    vv?.addEventListener("resize", sync);
-    vv?.addEventListener("scroll", sync);
-    this.registerDomEvent(el, "focusin", () => {
-      sync();
-      for (const ms of [150, 400, 800]) window.setTimeout(sync, ms);
-    });
-    this.registerDomEvent(el, "focusout", () => window.setTimeout(sync, 100));
-    this.register(() => {
-      vv?.removeEventListener("resize", sync);
-      vv?.removeEventListener("scroll", sync);
-      release();
-    });
   }
 
   async onOpen() {
@@ -258,20 +183,12 @@ export class MindAtlasView extends ItemView {
     this.buildMenu();
     this.bindPanZoom();
     this.bindFileDrop();
-    this.buildEditorPane();
-    this.applyEditorLayout();
-    this.keepInPlace();
     this.registerDomEvent(this.mapEl, "keydown", (e) => this.onKey(e));
 
     const refresh = () => this.scheduleRefresh();
     this.registerEvent(this.app.metadataCache.on("changed", refresh));
     this.registerEvent(this.app.vault.on("rename", refresh));
     this.registerEvent(this.app.vault.on("delete", refresh));
-    this.registerEvent(
-      this.app.vault.on("modify", (f) => {
-        if (f instanceof TFile) void this.editor?.onExternalModify(f);
-      })
-    );
     await this.render(true);
   }
 
@@ -282,71 +199,6 @@ export class MindAtlasView extends ItemView {
     if (this.layoutTimer) {
       window.clearTimeout(this.layoutTimer);
       await this.writeLayout();
-    }
-    await this.editor?.destroy();
-    this.editor = null;
-  }
-
-  private buildEditorPane() {
-    const divider = this.contentEl.createDiv("mind-atlas-divider");
-    this.editorPane = this.contentEl.createDiv("mind-atlas-editor-pane");
-    this.editorTitle = this.editorPane.createEl("input", {
-      cls: "mind-atlas-editor-title",
-      attr: { type: "text", spellcheck: "false", "aria-label": "Map title (press Enter to save)" },
-    });
-    this.editorTitle.addEventListener("keydown", (e) => {
-      e.stopPropagation();
-      if (e.key === "Enter") {
-        e.preventDefault();
-        this.editorTitle.blur();
-      } else if (e.key === "Escape") {
-        this.editorTitle.value = this.selectedNode()?.title ?? "";
-        this.editorTitle.blur();
-      }
-    });
-    this.editorTitle.addEventListener("blur", () => {
-      const n = this.selectedNode();
-      if (n) void this.setMapTitle(n, this.editorTitle.value);
-    });
-    const host = this.editorPane.createDiv("mind-atlas-editor");
-    this.editor = new NoteEditor(this.app, host, (f) => this.selectNode(f));
-
-    divider.addEventListener("pointerdown", (e) => {
-      divider.setPointerCapture(e.pointerId);
-      const right = this.plugin.settings.editorPosition === "right";
-      const start = right ? e.clientX : e.clientY;
-      const startSize = right ? this.editorWidth : this.editorHeight;
-      const max = (right ? this.contentEl.clientWidth : this.contentEl.clientHeight) - 160;
-      const move = (ev: PointerEvent) => {
-        const delta = start - (right ? ev.clientX : ev.clientY);
-        const size = Math.min(max, Math.max(right ? 200 : 80, startSize + delta));
-        if (right) this.editorWidth = size;
-        else this.editorHeight = size;
-        this.applyEditorLayout();
-      };
-      const up = () => {
-        divider.removeEventListener("pointermove", move);
-        divider.removeEventListener("pointerup", up);
-      };
-      divider.addEventListener("pointermove", move);
-      divider.addEventListener("pointerup", up);
-    });
-  }
-
-  /** Dock the editor below or beside the map, per the setting. */
-  private applyEditorLayout() {
-    if (!this.editorPane) return;
-    const right = this.plugin.settings.editorPosition === "right";
-    const pane = this.plugin.settings.editorPosition === "pane";
-    this.editorPane.toggleClass("is-hidden", pane);
-    if (pane) return;
-    this.contentEl.toggleClass("is-editor-right", right);
-    if (right) {
-      this.editorPane.style.width = `${this.editorWidth}px`;
-      this.editorPane.style.height = "";
-    } else {
-      this.editorPane.style.height = `${this.editorHeight}px`;
-      this.editorPane.style.width = "";
     }
   }
 
@@ -374,35 +226,8 @@ export class MindAtlasView extends ItemView {
       this.focusMode = this.focusBox.checked;
       this.applyFocus();
     };
-    const tidyBtn = bar.createEl("button", { text: "Tidy", attr: { title: "Find redundant parent links" } });
-    tidyBtn.onclick = () => this.openTidy();
-    const edLabel = bar.createEl("label", { attr: { title: "Show or hide the note editor" } });
-    this.editorBox = edLabel.createEl("input", { type: "checkbox" });
-    edLabel.appendText(" Editor");
-    this.editorBox.onchange = () => {
-      this.editorHidden = !this.editorBox!.checked;
-      this.syncToolbar();
-      this.app.workspace.requestSaveLayout();
-    };
-    const editorPosition = bar.createEl("select", { attr: { title: "Editor position" } });
-    editorPosition.createEl("option", { text: "Below", value: "bottom" });
-    editorPosition.createEl("option", { text: "Right", value: "right" });
-    editorPosition.createEl("option", { text: "Pane", value: "pane" });
-    editorPosition.value = this.plugin.settings.editorPosition;
-    editorPosition.onchange = () => {
-      this.plugin.settings.editorPosition = editorPosition.value as "bottom" | "right" | "pane";
-      void this.plugin.saveSettings();
-    };
-    if (Platform.isMobile) {
-      const dbLabel = bar.createEl("label", { attr: { title: "Show the layout debug readout" } });
-      this.debugBox = dbLabel.createEl("input", { type: "checkbox" });
-      dbLabel.appendText(" Debug");
-      this.debugBox.onchange = () => {
-        this.debug = this.debugBox!.checked;
-        this.syncToolbar();
-        this.app.workspace.requestSaveLayout();
-      };
-    }
+    const tidyBtn = bar.createEl("button", { text: "Tidy", attr: { title: "Find and fix redundant or self links on every note in the map" } });
+    tidyBtn.onclick = () => void this.openTidy();
     const boxLabel = bar.createEl("label");
     this.boxBox = boxLabel.createEl("input", { type: "checkbox" });
     boxLabel.appendText(" Boxes");
@@ -420,6 +245,19 @@ export class MindAtlasView extends ItemView {
     this.spreadSlider.addClass("mind-atlas-spread");
     this.spreadSlider.onchange = () => {
       this.plugin.settings.spacing = Number(this.spreadSlider.value);
+      void this.plugin.saveSettings();
+      void this.render(true);
+    };
+
+    const minLabel = bar.createEl("label", { attr: { title: "Minimum line length between a parent and child" } });
+    minLabel.appendText("Min line ");
+    this.minLineSlider = minLabel.createEl("input", { type: "range" });
+    this.minLineSlider.min = "0";
+    this.minLineSlider.max = "300";
+    this.minLineSlider.step = "5";
+    this.minLineSlider.addClass("mind-atlas-spread");
+    this.minLineSlider.onchange = () => {
+      this.plugin.settings.minLine = Number(this.minLineSlider.value);
       void this.plugin.saveSettings();
       void this.render(true);
     };
@@ -487,13 +325,10 @@ export class MindAtlasView extends ItemView {
   private syncToolbar() {
     if (this.depthLabel) this.depthLabel.setText(String(this.depth));
     if (this.backlinkBox) this.backlinkBox.checked = this.backlinks;
+    if (this.minLineSlider) this.minLineSlider.value = String(this.plugin.settings.minLine);
     if (this.spreadSlider) this.spreadSlider.value = String(this.plugin.settings.spacing);
     if (this.boxBox) this.boxBox.checked = this.plugin.settings.showBoxes;
-    if (this.editorBox) this.editorBox.checked = !this.editorHidden;
-    this.contentEl.toggleClass("is-editor-hidden", this.editorHidden);
     if (this.connBox) this.connBox.checked = this.plugin.settings.showConnections;
-    if (this.debugBox) this.debugBox.checked = this.debug;
-    this.contentEl.toggleClass("show-debug", this.debug);
   }
 
   private setDepth(d: number) {
@@ -510,7 +345,7 @@ export class MindAtlasView extends ItemView {
     this.selectNode(file);
   }
 
-  /** Select a node and load its note into the embedded editor. */
+  /** Select a node and load its note in a Markdown pane beside the map. */
   private selectNode(file: TFile) {
     this.selectedPath = file.path;
     for (const [n, el] of this.nodeEls) {
@@ -519,13 +354,13 @@ export class MindAtlasView extends ItemView {
     this.refreshCrossLinks(true);
     this.applyFocus();
     const title = this.graph?.nodes.find((n) => n.file.path === file.path)?.title ?? file.basename;
-    this.editorTitle.value = title;
-    if (this.plugin.settings.editorPosition === "pane") {
-      // Reuse one ordinary Markdown leaf so every subsequent node click simply
-      // replaces its content instead of creating an ever-growing row of tabs.
-      const leaf = this.editorLeaf ?? (this.editorLeaf = this.app.workspace.getLeaf("split", "vertical"));
-      void leaf.openFile(file);
-    } else void this.editor?.open(file);
+    // Reuse one Markdown pane so every click replaces its content instead of piling up tabs.
+    let leaf = this.editorLeaf;
+    if (!leaf || !this.app.workspace.getLeavesOfType("markdown").includes(leaf)) {
+      leaf = this.app.workspace.getLeaf("split", "vertical");
+      this.editorLeaf = leaf;
+    }
+    void leaf.openFile(file);
   }
 
   private scheduleRefresh() {
@@ -534,6 +369,8 @@ export class MindAtlasView extends ItemView {
   }
 
   private applyTransform() {
+    // Zoomed far out, drop the deepest labels so the overall shape stays readable.
+    this.svg?.toggleClass("ma-zoom-far", this.scale < 0.55);
     this.group.setAttribute(
       "transform",
       `translate(${this.tx} ${this.ty}) scale(${this.scale})`
@@ -646,6 +483,7 @@ export class MindAtlasView extends ItemView {
     this.svg.toggleClass("ma-no-boxes", !this.plugin.settings.showBoxes);
 
     this.group.empty();
+    this.hoverNode = null; // old node elements are gone, so no pointerleave will arrive
     this.nodeEls.clear();
     this.edgeEls = [];
     const edgeLayer = this.group.createSvg("g");
@@ -772,7 +610,13 @@ export class MindAtlasView extends ItemView {
     const g = this.graph;
     if (!g) return;
     const s = this.plugin.settings;
-    arrange(g.root, g.treeEdges, s.spacing, g.crossLinks);
+    const lc = this.measureCtx;
+    lc.font = `700 11px ${getComputedStyle(this.contentEl).fontFamily}`;
+    for (const e of g.treeEdges) {
+      const t = e.label && s.showLabels ? (e.label.length > 28 ? `${e.label.slice(0, 27)}…` : e.label) : "";
+      e.labelW = t ? lc.measureText(t).width : 0;
+    }
+    arrange(g.root, g.treeEdges, s.spacing, g.crossLinks, s.minLine);
     applyOffsets(g.root, g.treeEdges, this.offsets, this.free, g.nodes);
     // Lines feed back into placement: nudge notes that sit on a hierarchy line.
     const locked = new Set(g.nodes.filter((n) => this.offsets.has(n.file.path) || this.free.has(n.file.path)));
@@ -819,10 +663,8 @@ export class MindAtlasView extends ItemView {
   private colorOf(n: MapNode): string | undefined {
     if (n.floating) return undefined;
     if (n.color) return n.color;
-    if (this.plugin.settings.branchColors) {
-      let hash = 0;
-      for (const c of n.file.path) hash = ((hash * 31) + c.charCodeAt(0)) | 0;
-      return BRANCH_COLORS[Math.abs(hash) % BRANCH_COLORS.length];
+    if (this.plugin.settings.branchColors && n.branch >= 0) {
+      return BRANCH_COLORS[n.branch % BRANCH_COLORS.length];
     }
     return undefined;
   }
@@ -917,14 +759,63 @@ export class MindAtlasView extends ItemView {
       this.refreshEdgeSelection();
       this.mapEl.focus({ preventScroll: true });
     });
-    this.edgeEls.push({ edge, el, cross, gray, heads, hit, key });
+    hit.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      void this.editLabel(edge);
+    });
+    hit.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const menu = new Menu();
+      menu.addItem((i) => i.setTitle(edge.label ? "Edit label…" : "Add label…").setIcon("tag").onClick(() => void this.editLabel(edge)));
+      if (edge.label) menu.addItem((i) => i.setTitle("Remove label").setIcon("x").onClick(() => void this.saveLabel(edge, "")));
+      menu.showAtMouseEvent(e);
+    });
+
+    let label: SVGGElement | null = null;
+    if (edge.label && s.showLabels) {
+      label = layer.createSvg("g");
+      label.addClass("mind-atlas-label");
+      const shown = edge.label.length > 28 ? `${edge.label.slice(0, 27)}…` : edge.label;
+      const t = label.createSvg("text");
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("dy", "-0.25em");
+      t.textContent = shown;
+      t.style.fill = col || "var(--text-muted)";
+      label.createSvg("title").textContent = edge.label;
+      label.addEventListener("pointerdown", (e) => e.stopPropagation());
+      label.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        void this.editLabel(edge);
+      });
+    }
+    this.edgeEls.push({ edge, el, cross, gray, heads, hit, label, key });
+  }
+
+  private async editLabel(edge: Edge) {
+    const text = await askText(
+      this.app,
+      `Label: ${edge.from.title} → ${edge.to.title}`,
+      edge.label ?? "",
+      "What does this line mean? (empty removes it)"
+    );
+    if (text !== null) await this.saveLabel(edge, text);
+  }
+
+  private async saveLabel(edge: Edge, text: string) {
+    if (!edge.labelOwner || !edge.labelTarget) return;
+    await setLinkLabel(this.app, edge.labelOwner, edge.labelTarget, edge.kind === "child" ? "Children" : "Connections", text);
+    this.scheduleRefresh();
   }
 
   /** Dim everything but the selected note's parents, children and siblings. */
+  private hoverNode: MapNode | null = null;
+
   private applyFocus() {
     const g = this.graph;
-    const sel = g?.nodes.find((n) => n.file.path === this.selectedPath);
-    const active = this.focusMode && !!g && !!sel;
+    const hovered = !this.dragging && this.hoverNode && g?.nodes.includes(this.hoverNode) ? this.hoverNode : null;
+    const sel = hovered ?? (this.focusMode ? g?.nodes.find((n) => n.file.path === this.selectedPath) : undefined);
+    const active = !!g && !!sel;
     const keep = new Set<MapNode>();
     if (active && g && sel) {
       const edges = [...g.treeEdges, ...g.crossLinks.filter((e) => e.kind === "child")];
@@ -935,39 +826,29 @@ export class MindAtlasView extends ItemView {
         if (e.from === sel || parents.includes(e.from)) keep.add(e.to);
       }
     }
-    for (const [n, el] of this.nodeEls) el.toggleClass("is-dim", active && !keep.has(n));
+    // Hover only softens the rest of the map; Focus mode hides it almost completely.
+    const cls = hovered ? "is-faded" : "is-dim";
+    for (const [n, el] of this.nodeEls) {
+      el.toggleClass("is-dim", active && !hovered && !keep.has(n));
+      el.toggleClass("is-faded", active && !!hovered && !keep.has(n));
+    }
     for (const e of this.edgeEls) {
-      const dim = active && !(keep.has(e.edge.from) && keep.has(e.edge.to));
-      e.el.toggleClass("is-dim", dim);
-      e.hit.toggleClass("is-dim", dim);
-      e.heads.forEach((h) => h.toggleClass("is-dim", dim));
+      const off = active && !(keep.has(e.edge.from) && keep.has(e.edge.to));
+      for (const el of [e.el, e.hit, e.label, ...e.heads]) {
+        if (!el) continue;
+        el.toggleClass("is-dim", off && cls === "is-dim");
+        el.toggleClass("is-faded", off && cls === "is-faded");
+      }
     }
   }
 
-  /** List parent links that are already implied through another parent, and offer to remove them. */
-  private openTidy() {
+  /** Scan every note on the map for redundant or self links, and offer to fix them. */
+  private async openTidy() {
     const g = this.graph;
     if (!g) return;
-    const edges = [...g.treeEdges, ...g.crossLinks.filter((e) => e.kind === "child")].filter(
-      (e) => e.from.side !== -1 && e.to.side !== -1
-    );
-    const kids = new Map<MapNode, MapNode[]>();
-    for (const e of edges) (kids.get(e.from) ?? kids.set(e.from, []).get(e.from)!).push(e.to);
-    const reaches = (from: MapNode, to: MapNode, skip: MapNode): boolean => {
-      const seen = new Set<MapNode>([from]);
-      const stack = (kids.get(from) ?? []).filter((c) => c !== skip);
-      while (stack.length) {
-        const n = stack.pop()!;
-        if (n === to) return true;
-        if (seen.has(n)) continue;
-        seen.add(n);
-        stack.push(...(kids.get(n) ?? []));
-      }
-      return false;
-    };
-    const redundant = edges.filter((e) => reaches(e.from, e.to, e.to));
-    new TidyModal(this.app, redundant, async (e) => {
-      await removeChild(this.app, e.from.file, e.to.file);
+    const issues = await findTidyIssues(this.app, g.nodes.map((n) => n.file));
+    new TidyModal(this.app, issues, async (issue) => {
+      await fixTidyIssue(this.app, issue);
       this.scheduleRefresh();
     }).open();
   }
@@ -992,7 +873,7 @@ export class MindAtlasView extends ItemView {
     this.updatePreview();
     const boxes: LineBox[] = this.graph?.nodes.map((n) => ({ id: n.file.path, x: n.x, y: n.y, w: n.w, h: n.h })) ?? [];
     const boxOf = new Map(boxes.map((b) => [b.id, b]));
-    this.edgeEls.forEach(({ edge, el, cross, heads, hit }) => {
+    this.edgeEls.forEach(({ edge, el, cross, heads, hit, label }) => {
       const a = boxOf.get(edge.from.file.path);
       const b = boxOf.get(edge.to.file.path);
       if (!a || !b) return;
@@ -1001,6 +882,17 @@ export class MindAtlasView extends ItemView {
       el.style.strokeWidth = String(s.lineWidth * k * (cross ? 0.72 : 1.45));
       el.setAttribute("d", shape.d);
       hit.setAttribute("d", shape.d);
+      if (label) {
+        const len = el.getTotalLength();
+        const mid = el.getPointAtLength(len / 2);
+        const p0 = el.getPointAtLength(Math.max(0, len / 2 - 3));
+        const p1 = el.getPointAtLength(Math.min(len, len / 2 + 3));
+        let deg = (Math.atan2(p1.y - p0.y, p1.x - p0.x) * 180) / Math.PI;
+        // Keep the text upright: never upside down.
+        if (deg > 90) deg -= 180;
+        else if (deg < -90) deg += 180;
+        label.setAttribute("transform", `translate(${mid.x} ${mid.y}) rotate(${deg})`);
+      }
       // Only hierarchy lines carry an arrowhead, pointing parent -> child.
       heads[0].setAttribute("d", "");
       heads[1].setAttribute(
@@ -1021,6 +913,7 @@ export class MindAtlasView extends ItemView {
     const f = this.fontOf(n);
     const g = layer.createSvg("g");
     g.addClass("mind-atlas-node");
+    if (n.depth >= 3) g.addClass("ma-deep");
     if (isRoot) g.addClass("is-root");
     if (n.file.path === this.selectedPath) g.addClass("is-selected");
     if (n.side === -1 || n.floating) g.addClass("is-back");
@@ -1153,6 +1046,8 @@ export class MindAtlasView extends ItemView {
         if (!moved) {
           moved = true;
           this.dragging = n;
+          this.hoverNode = null;
+          this.applyFocus();
           this.hideMenu();
           this.beginDragVisuals(n, branch);
           window.addEventListener("keydown", onEsc, true);
@@ -1255,9 +1150,15 @@ export class MindAtlasView extends ItemView {
       if (e.pointerType !== "mouse" || this.tool !== "select" || this.dragging) return;
       this.cancelMenuHide();
       this.showMenu(n);
+      this.hoverNode = n;
+      this.applyFocus();
     });
     g.addEventListener("pointerleave", (e) => {
       if (e.pointerType === "mouse") this.scheduleMenuHide();
+      if (this.hoverNode === n) {
+        this.hoverNode = null;
+        this.applyFocus();
+      }
     });
     this.nodeEls.set(n, g);
   }
@@ -1345,8 +1246,7 @@ export class MindAtlasView extends ItemView {
 
   private async connect(src: TFile, dst: TFile) {
     try {
-      await this.editor?.flush();
-      let added = false;
+            let added = false;
       await this.undo.run("connection", [src.path], async () => {
         added = await addConnection(this.app, src, dst);
       });
@@ -1792,21 +1692,17 @@ export class MindAtlasView extends ItemView {
   private async renameFile(file: TFile, raw: string) {
     const title = sanitizeTitle(raw);
     if (!title || title === file.basename) {
-      if (this.editor?.currentFile === file) this.editorTitle.value = file.basename;
       return;
     }
     const dir = file.parent && file.parent.path !== "/" ? `${file.parent.path}/` : "";
     const newPath = `${dir}${title}.md`;
     if (this.app.vault.getAbstractFileByPath(newPath)) {
       new Notice(`A note named “${title}” already exists.`);
-      this.editorTitle.value = file.basename;
       return;
     }
     const old = file.path;
     try {
-      await this.editor?.flush();
-      await this.app.fileManager.renameFile(file, newPath);
-      if (this.editor?.currentFile === file) this.editorTitle.value = file.basename;
+            await this.app.fileManager.renameFile(file, newPath);
       const move = <T,>(m: Map<string, T>) => {
         if (m.has(old)) m.set(newPath, m.get(old)!);
         m.delete(old);
@@ -1840,8 +1736,7 @@ export class MindAtlasView extends ItemView {
 
   private async setMetaMany(n: MapNode, values: Record<string, string | null>) {
     try {
-      await this.editor?.flush();
-      await this.undo.run("style", [n.file.path], async () => {
+            await this.undo.run("style", [n.file.path], async () => {
         await this.app.fileManager.processFrontMatter(n.file, (fm) => {
           for (const [k, v] of Object.entries(values)) {
             if (v === null) delete fm[k];
@@ -1979,7 +1874,7 @@ export class MindAtlasView extends ItemView {
       const on =
         mode === "always" ||
         (mode === "hover" && (e.edge.from.file.path === this.selectedPath || e.edge.to.file.path === this.selectedPath));
-      for (const el of [e.el, e.hit, ...e.heads]) el.toggleClass("is-hidden", !on);
+      for (const el of [e.el, e.hit, ...e.heads, ...(e.label ? [e.label] : [])]) el.toggleClass("is-hidden", !on);
     }
     if (reroute) this.updatePositions();
   }
@@ -2023,8 +1918,7 @@ export class MindAtlasView extends ItemView {
     if (!choice) return;
     if (choice === "connection") return this.connect(src.file, dst.file);
     try {
-      await this.editor?.flush();
-      let added = false;
+            let added = false;
       await this.undo.run("link", [src.file.path], async () => {
         added = await addLink(this.app, src.file, dst.file);
       });
@@ -2090,8 +1984,7 @@ export class MindAtlasView extends ItemView {
     const [src, dst] = n.side === -1 ? [f, n.file] : [n.file, f];
     if (choice === "connection") return this.connect(src, dst);
     try {
-      await this.editor?.flush();
-      let added = false;
+            let added = false;
       await this.undo.run("link", [src.path], async () => {
         added = await addLink(this.app, src, dst);
       });
@@ -2113,8 +2006,7 @@ export class MindAtlasView extends ItemView {
     const name = await this.promptInline(pos, n.depth + 1, anchor, n);
     if (!name) return;
     try {
-      await this.editor?.flush();
-      await this.undo.run("new note", [n.file.path], async () => {
+            await this.undo.run("new note", [n.file.path], async () => {
         const file = await createNote(this.app, name, n.file);
         // On the backlink side a "child" is a note that links to this one.
         if (n.side === -1) await addLink(this.app, file, n.file);
@@ -2190,8 +2082,7 @@ export class MindAtlasView extends ItemView {
     return new Promise((resolve) => {
       const sizes = this.plugin.settings.headingSizes;
       const px = sizes[Math.min(depth, sizes.length - 1)];
-      // Hide the editor while typing so the on-screen keyboard leaves room for the map.
-      if (!this.contentEl.hasClass("is-editor-right")) this.contentEl.addClass("is-prompting");
+      this.contentEl.addClass("is-prompting");
       const el = this.mapEl.createDiv("mind-atlas-inline");
       el.setAttr("data-placeholder", "type here");
       el.setAttr("contenteditable", "plaintext-only");
@@ -2316,8 +2207,7 @@ export class MindAtlasView extends ItemView {
       }
     }
     try {
-      await this.editor?.flush();
-      // Outgoing notes are linked from their parent; backlink notes link to it.
+            // Outgoing notes are linked from their parent; backlink notes link to it.
       const paths = [d.file.path, t.file.path, ...(parent ? [parent.file.path] : [])];
       await this.undo.run("move", paths, async () => {
         if (parent) {
@@ -2341,8 +2231,7 @@ export class MindAtlasView extends ItemView {
     if (!entry) return;
     const { from, to } = entry.edge;
     try {
-      await this.editor?.flush();
-      let n = 0;
+            let n = 0;
       await this.undo.run("unlink", [from.file.path, to.file.path], async () => {
         n =
           (await removeLinks(this.app, from.file, to.file)) +
@@ -2383,8 +2272,7 @@ export class MindAtlasView extends ItemView {
     if (!pick) return;
 
     try {
-      await this.editor?.flush();
-      const touched = [n.file.path, ...(parent ? [parent.file.path] : []), ...(pick === "trash" ? incoming : [])];
+            const touched = [n.file.path, ...(parent ? [parent.file.path] : []), ...(pick === "trash" ? incoming : [])];
       await this.undo.run(pick === "trash" ? "delete" : "unlink", touched, async () => {
         if (pick === "unlink" && parent) {
           if (n.side === -1) await removeChild(this.app, n.file, parent.file);
@@ -2410,8 +2298,8 @@ export class MindAtlasView extends ItemView {
 class TidyModal extends Modal {
   constructor(
     app: App,
-    private items: Edge[],
-    private remove: (e: Edge) => Promise<void>
+    private items: TidyIssue[],
+    private fix: (e: TidyIssue) => Promise<void>
   ) {
     super(app);
   }
@@ -2419,22 +2307,33 @@ class TidyModal extends Modal {
   onOpen() {
     this.titleEl.setText("Tidy links");
     if (!this.items.length) {
-      this.contentEl.createEl("p", { text: "No redundant parent links found on this map." });
+      this.contentEl.createEl("p", { text: "No redundant links found on this map." });
       return;
     }
-    this.contentEl.createEl("p", {
-      text: "These notes are linked directly from a parent and also reachable through another note on the map.",
-    });
-    for (const e of this.items) {
+    this.contentEl.createEl("p", { text: `${this.items.length} redundant link(s) across the notes on this map.` });
+    const buttons: { b: ButtonComponent; done: boolean; issue: TidyIssue }[] = [];
+    const run = async (entry: (typeof buttons)[number]) => {
+      if (entry.done) return;
+      entry.done = true;
+      entry.b.setDisabled(true);
+      await this.fix(entry.issue);
+      entry.b.setButtonText("Fixed");
+    };
+    new Setting(this.contentEl).addButton((b) =>
+      b.setButtonText("Fix all").setCta().onClick(async () => {
+        for (const entry of buttons) await run(entry);
+      })
+    );
+    for (const issue of this.items) {
+      const name = issue.source === issue.target ? issue.source.basename : `${issue.source.basename} → ${issue.target.basename}`;
       new Setting(this.contentEl)
-        .setName(`${e.from.title} → ${e.to.title}`)
-        .addButton((b) =>
-          b.setButtonText("Remove link").onClick(async () => {
-            b.setDisabled(true);
-            await this.remove(e);
-            b.setButtonText("Removed");
-          })
-        );
+        .setName(name)
+        .setDesc(issue.reason)
+        .addButton((b) => {
+          const entry = { b, done: false, issue };
+          buttons.push(entry);
+          b.setButtonText("Fix").onClick(() => run(entry));
+        });
     }
   }
 

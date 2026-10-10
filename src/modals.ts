@@ -77,3 +77,41 @@ export function askChoice<T extends string>(
     modal.open();
   });
 }
+
+/** Ask for a line of text, pre-filled; resolves to null if cancelled (an empty string is allowed). */
+export function askText(app: App, title: string, initial: string, placeholder: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    let result: string | null = null;
+    const modal = new (class extends Modal {
+      onOpen() {
+        this.titleEl.setText(title);
+        const input = this.contentEl.createEl("input", {
+          type: "text",
+          cls: "mind-atlas-name-input",
+          attr: { placeholder },
+        });
+        input.value = initial;
+        const submit = () => {
+          result = input.value;
+          this.close();
+        };
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submit();
+          }
+        });
+        new Setting(this.contentEl).addButton((b) => b.setButtonText("Save").setCta().onClick(submit));
+        window.setTimeout(() => {
+          input.focus();
+          input.select();
+        }, 0);
+      }
+      onClose() {
+        this.contentEl.empty();
+        resolve(result);
+      }
+    })(app);
+    modal.open();
+  });
+}

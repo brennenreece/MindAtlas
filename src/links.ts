@@ -1,7 +1,7 @@
 import { App, normalizePath, TFile } from "obsidian";
+import { addEntry, hasSection, hasStructure, legacyParentNames, restructure, withLabel } from "./note-format";
 
 const CHILDREN_HEADING = /^#{1,6}\s+children\s*$/i;
-const PARENTS_HEADING = /^#{1,6}\s+parents\s*$/i;
 const CONNECTIONS_HEADING = /^#{1,6}\s+connections\s*$/i;
 const ANY_HEADING = /^#{1,6}\s+\S/;
 const WIKILINK = /(!?)\[\[([^\]\n|#^]+)(?:[#^][^\]\n|]*)?(?:\|([^\]\n]*))?\]\]/g;
@@ -115,58 +115,41 @@ function sectionRange(text: string, heading: RegExp): [number, number] | null {
   return start < 0 ? null : [start, text.length];
 }
 
-async function addToSection(app: App, source: TFile, target: TFile, heading: "Children" | "Parents" | "Connections") {
-  const matcher = heading === "Children" ? CHILDREN_HEADING : heading === "Parents" ? PARENTS_HEADING : CONNECTIONS_HEADING;
-  const linktext = app.metadataCache.fileToLinktext(target, source.path, true);
-  await app.vault.process(source, (text) => {
-    const range = sectionRange(text, matcher);
-    if (range && findLinks(app, text, source).some((l) => l.dest.path === target.path && l.start >= range[0] && l.start < range[1])) return text;
-    const link = `- [[${linktext}]]`;
-    if (!range) return `${text.replace(/\s+$/, "")}${text.trim() ? "\n\n" : ""}## ${heading}\n${link}\n`;
-    const at = text.lastIndexOf("\n", range[1] - 1) + 1;
-    return text.slice(0, at) + link + "\n" + text.slice(at);
-  });
-}
-
 /**
- * Make explicit relationship headings reciprocal.  This never removes prose links:
- * it only adds the missing paired entry (Children <-> Parents) and gives an
- * unclassified note link a Connections entry.
+ * One-time migration to the fixed `## Map` block: a legacy `## Parents` entry becomes
+ * an entry in that parent's Children, then Children/Connections move under `## Map`.
+ * A note with no relationship headings gets its links as Children.
  */
 export async function normalizeRelationships(app: App) {
-  type Relation = { kind: "child" | "parent" | "connection"; source: TFile; target: TFile };
-  const relations: Relation[] = [];
-  for (const source of app.vault.getMarkdownFiles()) {
-    const text = await app.vault.cachedRead(source);
-    const child = sectionRange(text, CHILDREN_HEADING);
-    const parent = sectionRange(text, PARENTS_HEADING);
-    const connection = sectionRange(text, CONNECTIONS_HEADING);
-    const hasStructure = !!child || !!parent || !!connection;
-    for (const link of findLinks(app, text, source)) {
-      const kind = child && link.start >= child[0] && link.start < child[1] ? "child"
-        : parent && link.start >= parent[0] && link.start < parent[1] ? "parent"
-        : connection && link.start >= connection[0] && link.start < connection[1] ? "connection"
-        // Preserve pre-heading maps: a note with no relationship headings used
-        // every link as a child. Once structured, ordinary prose is a reference.
-        : hasStructure ? "connection" : "child";
-      relations.push({ kind, source, target: link.dest });
+  const files = app.vault.getMarkdownFiles();
+  for (const source of files) {
+    const names = legacyParentNames(await app.vault.cachedRead(source));
+    for (const name of names) {
+      const parent = app.metadataCache.getFirstLinkpathDest(name, source.path);
+      if (parent && parent.extension === "md" && parent.path !== source.path) await addLink(app, parent, source);
     }
   }
-  for (const r of relations) {
-    if (r.kind === "child") {
-      await addToSection(app, r.source, r.target, "Children");
-      await addToSection(app, r.target, r.source, "Parents");
-    } else if (r.kind === "parent") {
-      await addToSection(app, r.source, r.target, "Parents");
-      await addToSection(app, r.target, r.source, "Children");
-    } else {
-      await addToSection(app, r.source, r.target, "Connections");
-    }
+  for (const source of files) {
+    const before = await app.vault.cachedRead(source);
+    const compute = (text: string) => {
+      let out = restructure(text);
+      if (!hasStructure(out)) {
+        const seen = new Set<string>();
+        for (const l of findLinks(app, out, source).sort((a, b) => a.start - b.start)) {
+          if (l.dest.extension !== "md" || l.dest.path === source.path || seen.has(l.dest.path)) continue;
+          seen.add(l.dest.path);
+          out = addEntry(out, "Children", `- [[${app.metadataCache.fileToLinktext(l.dest, source.path, true)}]]`);
+        }
+      }
+      return out;
+    };
+    if (compute(before) !== before) await app.vault.process(source, compute);
   }
 }
 
-/** Add `target` to `source`'s "## Children" section. False if it is already listed there. */
+/** Add `target` to `source`'s Children. False if it is already listed there. */
 export async function addLink(app: App, source: TFile, target: TFile): Promise<boolean> {
+  if (source.path === target.path) return false;
   const linktext = app.metadataCache.fileToLinktext(target, source.path, true);
   let added = false;
   await app.vault.process(source, (text) => {
@@ -177,40 +160,8 @@ export async function addLink(app: App, source: TFile, target: TFile): Promise<b
     // Without a Children section, any existing link already makes it a child.
     if (listed) return text;
     added = true;
-    const link = `- [[${linktext}]]`;
-    const lines = text.split("\n");
-
-    let heading = -1;
-    let fenced = false;
-    for (let i = 0; i < lines.length; i++) {
-      if (/^\s*(```|~~~)/.test(lines[i])) fenced = !fenced;
-      if (!fenced && CHILDREN_HEADING.test(lines[i])) {
-        heading = i;
-        break;
-      }
-    }
-    if (heading < 0) {
-      const body = text.replace(/\s+$/, "");
-      return (body ? body + "\n\n" : "") + `## Children\n${link}\n`;
-    }
-    let end = lines.length;
-    for (let i = heading + 1; i < lines.length; i++) {
-      if (ANY_HEADING.test(lines[i])) {
-        end = i;
-        break;
-      }
-    }
-    let at = heading + 1;
-    for (let i = end - 1; i > heading; i--) {
-      if (lines[i].trim()) {
-        at = i + 1;
-        break;
-      }
-    }
-    lines.splice(at, 0, link);
-    return lines.join("\n");
+    return addEntry(text, "Children", `- [[${linktext}]]`);
   });
-  if (added) await addToSection(app, target, source, "Parents");
   return added;
 }
 
@@ -224,6 +175,7 @@ export async function removeLinks(app: App, source: TFile, target: TFile, onlyCh
   await app.vault.process(source, (text) => {
     const range = onlyChildren ? childrenRange(text) : null;
     if (onlyChildren && !range) return text;
+    const structural = [childrenRange(text), sectionRange(text, CONNECTIONS_HEADING)];
     const hits = findLinks(app, text, source)
       .filter((l) => l.dest.path === target.path)
       .filter((l) => !range || (l.start >= range[0] && l.start < range[1]))
@@ -235,7 +187,8 @@ export async function removeLinks(app: App, source: TFile, target: TFile, onlyCh
       const lineEnd = nl < 0 ? text.length : nl;
       const before = text.slice(lineStart, l.start);
       const after = text.slice(l.end, lineEnd);
-      if (/^\s*(?:[-*+]|\d+[.)])\s+$/.test(before) && after.trim() === "") {
+      const inBlock = structural.some((r) => r && l.start >= r[0] && l.start < r[1]);
+      if (/^\s*(?:[-*+]|\d+[.)])\s+$/.test(before) && (after.trim() === "" || inBlock)) {
         text = text.slice(0, lineStart) + text.slice(Math.min(lineEnd + 1, text.length));
       } else {
         text = text.slice(0, l.start) + l.display + text.slice(l.end);
@@ -259,53 +212,170 @@ export async function removeChild(app: App, source: TFile, target: TFile): Promi
  * Returns false if the two are already linked from `source`.
  */
 export async function addConnection(app: App, source: TFile, target: TFile): Promise<boolean> {
+  if (source.path === target.path) return false;
+  // A pair that already has a relationship in either direction needs no extra connection.
+  const reverse = await app.vault.cachedRead(target);
+  for (const heading of [CHILDREN_HEADING, CONNECTIONS_HEADING]) {
+    const range = sectionRange(reverse, heading);
+    if (range && findLinks(app, reverse, target).some((l) => l.dest.path === source.path && l.start >= range[0] && l.start < range[1])) {
+      return false;
+    }
+  }
   const linktext = app.metadataCache.fileToLinktext(target, source.path, true);
   let added = false;
   await app.vault.process(source, (text) => {
     const found = findLinks(app, text, source);
     if (found.some((l) => l.dest.path === target.path)) return text;
     added = true;
-    const link = `- [[${linktext}]]`;
-    let body = text.replace(/\s+$/, "");
-
-    if (!childrenRange(text)) {
+    let out = restructure(text);
+    // A note without a Children section treats every link as a child, so keep those as children first.
+    if (!hasSection(out, "Children")) {
       const seen = new Set<string>();
-      const kids: string[] = [];
       for (const l of found.sort((a, b) => a.start - b.start)) {
         if (l.dest.extension !== "md" || l.dest.path === source.path || seen.has(l.dest.path)) continue;
         seen.add(l.dest.path);
-        kids.push(`- [[${app.metadataCache.fileToLinktext(l.dest, source.path, true)}]]`);
-      }
-      if (kids.length) body += `${body ? "\n\n" : ""}## Children\n${kids.join("\n")}`;
-    }
-
-    const lines = body.split("\n");
-    let heading = -1;
-    let fenced = false;
-    for (let i = 0; i < lines.length; i++) {
-      if (/^\s*(```|~~~)/.test(lines[i])) fenced = !fenced;
-      if (!fenced && CONNECTIONS_HEADING.test(lines[i])) {
-        heading = i;
-        break;
+        out = addEntry(out, "Children", `- [[${app.metadataCache.fileToLinktext(l.dest, source.path, true)}]]`);
       }
     }
-    if (heading < 0) return `${body}${body ? "\n\n" : ""}## Connections\n${link}\n`;
-    let end = lines.length;
-    for (let i = heading + 1; i < lines.length; i++) {
-      if (ANY_HEADING.test(lines[i])) {
-        end = i;
-        break;
-      }
-    }
-    let at = heading + 1;
-    for (let i = end - 1; i > heading; i--) {
-      if (lines[i].trim()) {
-        at = i + 1;
-        break;
-      }
-    }
-    lines.splice(at, 0, link);
-    return lines.join("\n") + "\n";
+    return addEntry(out, "Connections", `- [[${linktext}]]`);
   });
   return added;
+}
+
+export type TidyHeading = "Children" | "Connections";
+
+export interface TidyIssue {
+  source: TFile;
+  target: TFile;
+  heading: TidyHeading;
+  reason: string;
+  // Remove only repeated entries, keeping the first.
+  keepFirst?: boolean;
+}
+
+const HEADINGS: [TidyHeading, RegExp][] = [
+  ["Children", CHILDREN_HEADING],
+  ["Connections", CONNECTIONS_HEADING],
+];
+
+/**
+ * Scan the given notes for relationship clutter: links to themselves, repeated
+ * entries, connections that duplicate a parent/child or another connection, and
+ * child links already implied through another child.
+ */
+export async function findTidyIssues(app: App, files: TFile[]): Promise<TidyIssue[]> {
+  const issues: TidyIssue[] = [];
+  const inMap = new Set(files.map((f) => f.path));
+  const sections = new Map<string, Record<TidyHeading, TFile[]>>();
+
+  for (const f of files) {
+    const text = await app.vault.cachedRead(f);
+    const rec: Record<TidyHeading, TFile[]> = { Children: [], Connections: [] };
+    const links = findLinks(app, text, f).sort((a, b) => a.start - b.start);
+    for (const [heading, re] of HEADINGS) {
+      const range = sectionRange(text, re);
+      if (!range) continue;
+      const seen = new Set<string>();
+      for (const l of links) {
+        if (l.start < range[0] || l.start >= range[1]) continue;
+        if (l.dest.path === f.path) {
+          issues.push({ source: f, target: f, heading, reason: `Links to itself (${heading})` });
+        } else if (seen.has(l.dest.path)) {
+          issues.push({ source: f, target: l.dest, heading, keepFirst: true, reason: `Listed more than once under ${heading}` });
+        } else {
+          seen.add(l.dest.path);
+          rec[heading].push(l.dest);
+        }
+      }
+    }
+    sections.set(f.path, rec);
+  }
+
+  const has = (a: string, b: string, h: TidyHeading) => sections.get(a)?.[h].some((t) => t.path === b) ?? false;
+  const parentChild = (p: string, c: string) => has(p, c, "Children");
+
+  for (const f of files) {
+    for (const t of sections.get(f.path)!.Connections) {
+      if (parentChild(f.path, t.path) || parentChild(t.path, f.path)) {
+        issues.push({ source: f, target: t, heading: "Connections", reason: "Already a parent/child — connection is redundant" });
+      } else if (has(t.path, f.path, "Connections") && f.path > t.path) {
+        issues.push({ source: f, target: t, heading: "Connections", reason: "Connected in both directions — one is enough" });
+      }
+    }
+  }
+
+  const kids = new Map<string, Set<string>>();
+  const edge = (p: string, c: string) => {
+    if (p === c || !inMap.has(p) || !inMap.has(c)) return;
+    if (!kids.has(p)) kids.set(p, new Set());
+    kids.get(p)!.add(c);
+  };
+  for (const f of files) {
+    for (const c of sections.get(f.path)!.Children) edge(f.path, c.path);
+  }
+  const reaches = (from: string, to: string): boolean => {
+    const seen = new Set<string>([from]);
+    const stack = [...(kids.get(from) ?? [])].filter((c) => c !== to);
+    while (stack.length) {
+      const n = stack.pop()!;
+      if (n === to) return true;
+      if (seen.has(n)) continue;
+      seen.add(n);
+      stack.push(...(kids.get(n) ?? []));
+    }
+    return false;
+  };
+  for (const f of files) {
+    for (const c of sections.get(f.path)!.Children) {
+      if (inMap.has(c.path) && c.path !== f.path && reaches(f.path, c.path)) {
+        issues.push({ source: f, target: c, heading: "Children", reason: "Also reachable through another child" });
+      }
+    }
+  }
+  return issues;
+}
+
+async function removeFromSection(app: App, source: TFile, target: TFile, heading: TidyHeading, keepFirst: boolean) {
+  const re = HEADINGS.find(([h]) => h === heading)![1];
+  await app.vault.process(source, (text) => {
+    const range = sectionRange(text, re);
+    if (!range) return text;
+    let hits = findLinks(app, text, source)
+      .filter((l) => l.dest.path === target.path && l.start >= range[0] && l.start < range[1])
+      .sort((a, b) => a.start - b.start);
+    if (keepFirst) hits = hits.slice(1);
+    for (const l of hits.reverse()) {
+      const lineStart = text.lastIndexOf("\n", l.start - 1) + 1;
+      const nl = text.indexOf("\n", l.end);
+      const lineEnd = nl < 0 ? text.length : nl;
+      const before = text.slice(lineStart, l.start);
+      const after = text.slice(l.end, lineEnd);
+      if (/^\s*(?:[-*+]|\d+[.)])\s+$/.test(before) && after.trim() === "") {
+        text = text.slice(0, lineStart) + text.slice(Math.min(lineEnd + 1, text.length));
+      } else {
+        text = text.slice(0, l.start) + l.display + text.slice(l.end);
+      }
+    }
+    return text;
+  });
+}
+
+export async function fixTidyIssue(app: App, issue: TidyIssue) {
+  await removeFromSection(app, issue.source, issue.target, issue.heading, !!issue.keepFirst);
+}
+
+/** Set (or clear, with an empty string) the remark after `target`'s entry in `owner`'s Children or Connections. */
+export async function setLinkLabel(app: App, owner: TFile, target: TFile, section: "Children" | "Connections", label: string) {
+  const re = section === "Children" ? CHILDREN_HEADING : CONNECTIONS_HEADING;
+  await app.vault.process(owner, (text) => {
+    const range = sectionRange(text, re);
+    if (!range) return text;
+    const hit = findLinks(app, text, owner)
+      .filter((l) => l.dest.path === target.path && l.start >= range[0] && l.start < range[1])
+      .sort((a, b) => a.start - b.start)[0];
+    if (!hit) return text;
+    const nl = text.indexOf("\n", hit.end);
+    const lineEnd = nl < 0 ? text.length : nl;
+    return text.slice(0, hit.start) + withLabel(text.slice(hit.start, hit.end), label) + text.slice(lineEnd);
+  });
 }
