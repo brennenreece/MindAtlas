@@ -62,7 +62,7 @@ export function routeCrossLinks(
   );
 
   for (const link of ordered) {
-    const candidates = [...legacyCandidates(link), ...detourCandidates(link, boxes)];
+    const candidates = detourCandidates(link, boxes);
     let best: CrossLinkRoute | null = null;
     let bestCost = Infinity;
 
@@ -89,14 +89,6 @@ export function routeCrossLinks(
   }
 
   return routes;
-}
-
-function legacyCandidates(link: CrossLinkInput): Pt[][] {
-  const len = distance(link.start, link.end) || 1;
-  const bend = Math.max(24, Math.min(90, len * 0.18));
-  const maxBend = Math.max(bend, Math.min(320, len * 0.6));
-  return [...new Set([0, bend, -bend, bend * 2, -bend * 2, maxBend, -maxBend])]
-    .map((amount) => [link.start, controlPoint(link.start, link.end, amount), link.end]);
 }
 
 /**

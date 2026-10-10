@@ -69,10 +69,8 @@
 .mind-atlas-menu button.is-hidden { display: none; }
 .mind-atlas-name-input { width: 100%; margin-bottom: 12px; }
 
-.mind-atlas-node.is-dragged { filter: drop-shadow(0 0 8px var(--interactive-accent)); transform-box: fill-box; transform-origin: center; animation: mind-atlas-grab 140ms ease-out forwards; }
 .mind-atlas-node.is-drop-invalid rect { stroke: var(--text-error); stroke-width: 3; }
 .is-dragging-node .mind-atlas-node { cursor: grabbing; }
-@keyframes mind-atlas-grab { from { transform: scale(1); } to { transform: scale(1.15); } }
 .mind-atlas-drag-label { position: absolute; z-index: 4; transform: translate(-50%, -100%); padding: 2px 8px; border-radius: 4px; background: var(--interactive-accent); color: var(--text-on-accent); font-size: 12px; white-space: nowrap; pointer-events: none; }
 .mind-atlas-drag-label.is-invalid { background: var(--text-error); color: #fff; }
 

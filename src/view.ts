@@ -929,7 +929,7 @@ export class MindAtlasView extends ItemView {
     // Lines touching a backlink note are grayed out.
     const gray = edge.from.side === -1 || edge.to.side === -1 || !!edge.from.floating || !!edge.to.floating;
     const el = layer.createSvg("path");
-    const filled = !cross && s.lineStyle === "organic";
+    const filled = false;
     el.addClass(cross ? "mind-atlas-cross" : filled ? "mind-atlas-edge-fill" : "mind-atlas-edge");
     if (gray) el.addClass("is-back");
     const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
@@ -1108,90 +1108,31 @@ export class MindAtlasView extends ItemView {
     this.positionInline();
     this.updatePreview();
     const boxes = this.graph?.nodes.map((n) => ({ id: n.file.path, x: n.x, y: n.y, w: n.w, h: n.h })) ?? [];
-    // Hierarchy is laid out as a tree, so its edges are deliberately simple:
-    // one direct stroke from a parent lane to a child lane. Connections are
-    // the only relationship type allowed to curve or route around obstacles.
-    const occupied = this.edgeEls.flatMap(({ edge, cross, el }, i) => {
-      if (cross || el.hasClass("is-hidden")) return [];
+    // Every line is a straight segment, detouring with straight bends only when
+    // a note is in the way. Hierarchy lines are routed first so they win.
+    const links = this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
+      if (el.hasClass("is-hidden")) return [];
       const [a, b] = anchors[i];
-      return [{ source: edge.from.file.path, target: edge.to.file.path, points: [a.p, b.p] }];
+      return [{ key, source: edge.from.file.path, target: edge.to.file.path, start: a.p, end: b.p, strict: !cross }];
     });
-    const links = routeCrossLinks
-      ? this.edgeEls.flatMap(({ edge, cross, key, el }, i) => {
-          // Connections are the only overlay lines. Tree edges are laid out and
-          // rendered directly inside their own branch territory.
-          if (!cross || el.hasClass("is-hidden")) return [];
-          const [a, b] = anchors[i];
-          return [{
-            key,
-            source: edge.from.file.path,
-            target: edge.to.file.path,
-            start: a.p,
-            end: b.p,
-            strict: false,
-          }];
-        })
-      : [];
     const routed = findCrossLinkRoutes(
-      links,
+      links.filter((l) => l.strict).concat(links.filter((l) => !l.strict)),
       boxes,
-      occupied
+      []
     );
-    this.edgeEls.forEach(({ edge, el, cross, heads }, i) => {
-      // Cross-links are never ribbons; they stay dashed strokes.
-    const style = cross ? "curved" : s.lineStyle;
-      const k = !cross && s.taperLines ? Math.max(0.35, 1 - 0.18 * (edge.to.depth - 1)) : 1;
+    this.edgeEls.forEach(({ edge, el, cross, heads, hit, key }, i) => {
       const [a, b] = anchors[i];
-      if (cross) {
-        const route = routed.get(this.edgeEls[i].key);
-        const points = route?.points ?? [a.p, b.p];
-        // Secondary relationships use the same smooth visual language as the
-        // primary hierarchy. Waypoints only steer the curve around obstacles;
-        // they are not exposed as harsh elbow corners.
-        const d = smoothRoutePath(points);
-        el.setAttribute("d", d);
-        this.edgeEls[i].hit.setAttribute("d", d);
-        const unit = (from: Pt, to: Pt) => {
-          const l = Math.hypot(to.x - from.x, to.y - from.y) || 1;
-          return { x: (to.x - from.x) / l, y: (to.y - from.y) / l };
-        };
-        heads[0].setAttribute("d", edge.back ? arrowHead(a.p, unit(points[1] ?? b.p, a.p), 8) : "");
-        heads[1].setAttribute("d", edge.fwd ? arrowHead(b.p, unit(points[points.length - 2] ?? a.p, b.p), 8) : "");
-        return;
-      }
-      const points = [a.p, b.p];
-      const structuralPath = structuralPathFor(this.plugin.settings.lineEngine, a, b);
-      el.setAttribute(
+      const points = routed.get(key)?.points ?? [a.p, b.p];
+      const d = roundedRoutePath(points, 8);
+      el.setAttribute("d", d);
+      hit.setAttribute("d", d);
+      // Only hierarchy lines carry an arrowhead, pointing parent -> child.
+      heads[0].setAttribute("d", "");
+      const size = 7 + s.lineWidth * 2;
+      heads[1].setAttribute(
         "d",
-        structuralPath
+        edge.kind === "child" ? arrowHead(b.p, routeUnit(points[points.length - 2] ?? a.p, b.p), size) : ""
       );
-      this.edgeEls[i].hit.setAttribute("d", structuralPath);
-
-      // Arrowheads point into the node that is linked to; mutual links get both.
-      const size = 7 + s.lineWidth * 2 * k;
-      const ends: [boolean, typeof a, typeof a][] = [
-        [edge.back, a, b],
-        [edge.fwd, b, a],
-      ];
-      ends.forEach(([show, end, other], idx) => {
-        const head = heads[idx];
-        if (!show) {
-          head.setAttribute("d", "");
-          return;
-        }
-        let dir: Pt;
-        if (idx === 0) {
-          dir = routeUnit(points[1] ?? b.p, a.p);
-        } else if (idx === 1) {
-          dir = routeUnit(points[points.length - 2] ?? a.p, b.p);
-        } else if (style === "straight") {
-          const len = Math.hypot(end.p.x - other.p.x, end.p.y - other.p.y) || 1;
-          dir = { x: (end.p.x - other.p.x) / len, y: (end.p.y - other.p.y) / len };
-        } else {
-          dir = { x: -end.dir.x, y: -end.dir.y };
-        }
-        head.setAttribute("d", arrowHead(end.p, dir, size));
-      });
     });
   }
 
